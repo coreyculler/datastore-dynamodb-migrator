@@ -1,0 +1,74 @@
+---
+alwaysApply: true
+description: "DataStore to DynamoDB Migration Utility - Project Overview and Development Guide"
+---
+
+# DataStore to DynamoDB Migration Utility
+
+## Project Overview
+This utility migrates Google Cloud Platform (GCP) DataStore tables to Amazon Web Services (AWS) DynamoDB. The tool automatically converts each DataStore Kind into a separate DynamoDB table, handling schema differences and providing an interactive migration experience.
+
+## Core Requirements
+
+### Migration Logic
+- **Source**: GCP DataStore tables
+- **Target**: AWS DynamoDB tables  
+- **Mapping**: Each DataStore Kind → Individual DynamoDB table
+- **Auto-creation**: DynamoDB tables created automatically if they don't exist
+- **Introspection**: Use reflection/introspection to avoid manual type definitions for each record
+
+### Interactive Key Selection
+- List all fields per Kind during migration
+- Allow user to interactively select:
+  - Primary key (partition key) for each Kind
+  - Sort key (optional) for each Kind if needed
+- Provide field type information to help with key selection decisions
+
+### Language Preference
+- **Primary Choice**: Golang (preferred for its strong concurrency, AWS SDK support, and introspection capabilities)
+
+## Technical Architecture
+
+### Key Components
+1. **DataStore Reader**: Connect to GCP DataStore and enumerate Kinds/entities
+2. **Schema Introspector**: Analyze field types and structures per Kind
+3. **Interactive CLI**: Present field information and capture user key selections using `spf13/cobra` for command structure
+4. **DynamoDB Manager**: Create tables with selected keys and handle data transformation
+5. **Migration Engine**: Orchestrate the transfer process with progress tracking
+
+### Development Guidelines
+- Use introspection/reflection to handle arbitrary record structures
+- Implement CLI using `spf13/cobra` for structured command handling and subcommands
+- Implement robust error handling for network operations
+- Provide clear progress indicators during migration
+- Log all operations for debugging and audit purposes
+- Handle large datasets efficiently (streaming/batching)
+- Validate key selections before table creation
+
+### Expected File Structure
+```
+├── main.go                 # Entry point and CLI setup
+├── internal/
+│   ├── datastore/         # GCP DataStore operations
+│   ├── dynamodb/          # AWS DynamoDB operations  
+│   ├── migration/         # Core migration logic
+│   ├── introspection/     # Schema analysis utilities
+│   └── cli/               # Interactive user interface
+├── config/                # Configuration management
+├── go.mod                 # Go module dependencies
+└── README.md              # Project documentation
+```
+
+## Development Priorities
+1. **Reliability**: Handle network failures, partial migrations gracefully
+2. **User Experience**: Clear prompts, progress indicators, helpful error messages
+3. **Performance**: Efficient handling of large datasets
+4. **Flexibility**: Support various DataStore schema patterns
+5. **Safety**: Validate operations before execution, provide dry-run capability
+
+## Key Dependencies (Golang)
+- `cloud.google.com/go/datastore` - GCP DataStore client
+- `github.com/aws/aws-sdk-go-v2` - AWS DynamoDB client  
+- `github.com/spf13/cobra` - CLI framework
+- `github.com/manifoldco/promptui` - Interactive prompts
+- Standard library `reflect` package for introspection

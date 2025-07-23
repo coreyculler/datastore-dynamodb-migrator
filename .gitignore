@@ -1,0 +1,95 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Project binary
+datastore-dynamodb-migrator
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+vendor/
+
+# Go workspace file
+go.work
+
+# Build output
+/bin/
+/build/
+/dist/
+
+# Configuration files that may contain secrets
+config/*.json
+config/*.yaml
+config/*.yml
+config/*.toml
+*.env
+.env*
+
+# AWS credentials and config
+.aws/
+aws-credentials*
+
+# GCP service account keys
+*service-account*.json
+*credentials*.json
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Log files
+*.log
+logs/
+/log/
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# Test coverage
+coverage.html
+coverage.out
+coverage.txt
+
+# Migration artifacts and backups
+backups/
+migrations/
+*.bak
+*.backup
+
+# Debug files
+debug
+__debug_bin*
+
+# Air (Go live reload) files
+.air.toml
+tmp/
+
+# Local development
+.local/
+local/
+
+# Documentation build artifacts
+docs/_build/
+site/ 
