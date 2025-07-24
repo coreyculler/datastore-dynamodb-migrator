@@ -131,31 +131,22 @@ func (c *Client) AnalyzeKind(ctx context.Context, kind string) (*interfaces.Kind
 		}
 	}
 
-	// Add the DataStore key identifier field
-	// Check if there's already an "id" field, if so use a different name
-	keyFieldName := "id"
-	if _, exists := fieldMap["id"]; exists {
-		keyFieldName = "__key__"
-	}
+	// Add DataStore key fields based on actual key structure
+	c.addKeyFields(keys, fieldMap)
 
-	// Add the key identifier field - this represents the DataStore entity key
-	fieldMap[keyFieldName] = interfaces.FieldInfo{
-		Name:     keyFieldName,
-		TypeName: "string",
-		Sample:   c.getKeyIdentifierSample(keys),
-	}
-
-	// Convert map to slice, ensuring the key field is first (for default selection)
+	// Convert map to slice, ensuring DataStore Primary Key field is first (for default selection)
 	fields := make([]interfaces.FieldInfo, 0, len(fieldMap))
 
-	// Add the key field first
-	if keyField, exists := fieldMap[keyFieldName]; exists {
-		fields = append(fields, keyField)
+	// Add DataStore Primary Key field first (using "PK" internal name)
+	if primaryKeyField, exists := fieldMap["PK"]; exists {
+		fields = append(fields, primaryKeyField)
+	} else if primaryKeyField, exists := fieldMap["__primary_key__"]; exists {
+		fields = append(fields, primaryKeyField)
 	}
 
 	// Add remaining fields
 	for fieldName, field := range fieldMap {
-		if fieldName != keyFieldName {
+		if fieldName != "PK" && fieldName != "__primary_key__" {
 			fields = append(fields, field)
 		}
 	}
@@ -292,14 +283,25 @@ type EntityWithKey struct {
 func (e *EntityWithKey) ToMap() map[string]interface{} {
 	result := make(map[string]interface{})
 
-	// Add the key information
+	// Add the key information with both legacy and synthetic Primary Key field
 	if e.Key != nil {
 		result["__key__"] = e.Key.String()
+
+		// Add legacy fields for compatibility
 		if e.Key.Name != "" {
 			result["__key_name__"] = e.Key.Name
 		}
 		if e.Key.ID != 0 {
 			result["__key_id__"] = e.Key.ID
+		}
+
+		// Add synthetic DataStore Primary Key field as "PK" (always as string)
+		if e.Key.Name != "" {
+			result["PK"] = e.Key.Name
+		} else if e.Key.ID != 0 {
+			result["PK"] = fmt.Sprintf("%d", e.Key.ID) // Convert numeric ID to string
+		} else {
+			result["PK"] = e.Key.String()
 		}
 	}
 
@@ -348,4 +350,69 @@ func (c *Client) getKeyIdentifierSample(keys []*datastore.Key) string {
 		return fmt.Sprintf("%d", key.ID)
 	}
 	return "key_identifier"
+}
+
+// addKeyFields adds a single synthetic Primary Key field to the field map
+func (c *Client) addKeyFields(keys []*datastore.Key, fieldMap map[string]interfaces.FieldInfo) {
+	if len(keys) == 0 {
+		return
+	}
+
+	// Determine the sample value (type will always be string for DynamoDB PK)
+	var sampleValue interface{}
+	hasStringName := false
+	hasNumericID := false
+
+	for _, key := range keys {
+		if key.Name != "" {
+			hasStringName = true
+		}
+		if key.ID != 0 {
+			hasNumericID = true
+		}
+	}
+
+	if hasStringName {
+		sampleValue = c.getFirstKeyName(keys)
+	} else if hasNumericID {
+		sampleValue = c.getFirstKeyID(keys)
+	} else {
+		sampleValue = c.getKeyIdentifierSample(keys)
+	}
+
+	// Use "PK" as the DynamoDB attribute name and a more descriptive display name.
+	internalName := "PK"
+	displayName := "DataStore Primary Key (ID/Name)"
+
+	// Check if the internal name already exists (unlikely but safe)
+	if _, exists := fieldMap[internalName]; exists {
+		internalName = "__primary_key__"
+	}
+
+	fieldMap[internalName] = interfaces.FieldInfo{
+		Name:        internalName,
+		DisplayName: displayName,
+		TypeName:    "string",                       // Always string type for consistency in DynamoDB
+		Sample:      fmt.Sprintf("%v", sampleValue), // Convert sample to string representation
+	}
+}
+
+// getFirstKeyName returns the first non-empty key name from the provided keys
+func (c *Client) getFirstKeyName(keys []*datastore.Key) string {
+	for _, key := range keys {
+		if key.Name != "" {
+			return key.Name
+		}
+	}
+	return ""
+}
+
+// getFirstKeyID returns the first non-zero key ID from the provided keys
+func (c *Client) getFirstKeyID(keys []*datastore.Key) int64 {
+	for _, key := range keys {
+		if key.ID != 0 {
+			return key.ID
+		}
+	}
+	return 0
 }

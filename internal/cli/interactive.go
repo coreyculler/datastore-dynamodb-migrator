@@ -77,7 +77,11 @@ func (s *InteractiveSelector) AskToSkipKind(ctx context.Context, schema interfac
 				fmt.Printf("  ... and %d more fields\n", len(schema.Fields)-5)
 				break
 			}
-			fmt.Printf("  - %s (%s)\n", field.Name, field.TypeName)
+			displayName := field.Name
+			if field.DisplayName != "" {
+				displayName = field.DisplayName
+			}
+			fmt.Printf("  - %s (%s)\n", displayName, field.TypeName)
 		}
 		fmt.Println()
 	}
@@ -141,7 +145,7 @@ func (s *InteractiveSelector) SelectKeys(ctx context.Context, schema interfaces.
 	}
 
 	// Confirm the selection
-	confirmed, err := s.confirmKeySelection(ctx, keySelection)
+	confirmed, err := s.confirmKeySelection(ctx, keySelection, schema)
 	if err != nil {
 		return interfaces.KeySelection{}, fmt.Errorf("failed to confirm selection: %w", err)
 	}
@@ -160,7 +164,11 @@ func (s *InteractiveSelector) displaySchema(schema interfaces.KindSchema) {
 	fmt.Println("==================")
 
 	for i, field := range schema.Fields {
-		fmt.Printf("%d. %s\n", i+1, field.Name)
+		displayName := field.Name
+		if field.DisplayName != "" {
+			displayName = field.DisplayName
+		}
+		fmt.Printf("%d. %s\n", i+1, displayName)
 		fmt.Printf("   Type: %s\n", field.TypeName)
 		if field.Sample != nil {
 			sampleStr := fmt.Sprintf("%v", field.Sample)
@@ -179,9 +187,14 @@ func (s *InteractiveSelector) selectPartitionKey(ctx context.Context, schema int
 	defaultCursorPos := 0
 
 	for i, field := range schema.Fields {
-		fieldNames[i] = fmt.Sprintf("%s (%s)", field.Name, field.TypeName)
-		// Set the DataStore key identifier field (id or __key__) as the default selection
-		if field.Name == "id" || field.Name == "__key__" {
+		displayName := field.Name
+		if field.DisplayName != "" {
+			displayName = field.DisplayName
+		}
+		fieldNames[i] = fmt.Sprintf("%s (%s)", displayName, field.TypeName)
+
+		// Set the primary key field as the default selection
+		if field.Name == "PK" || field.Name == "__primary_key__" {
 			defaultCursorPos = i
 		}
 	}
@@ -236,8 +249,12 @@ func (s *InteractiveSelector) selectSortKey(ctx context.Context, schema interfac
 
 	for _, field := range schema.Fields {
 		if field.Name != partitionKey {
+			displayName := field.Name
+			if field.DisplayName != "" {
+				displayName = field.DisplayName
+			}
 			availableFields = append(availableFields, field)
-			fieldNames = append(fieldNames, fmt.Sprintf("%s (%s)", field.Name, field.TypeName))
+			fieldNames = append(fieldNames, fmt.Sprintf("%s (%s)", displayName, field.TypeName))
 		}
 	}
 
@@ -266,11 +283,33 @@ func (s *InteractiveSelector) selectSortKey(ctx context.Context, schema interfac
 }
 
 // confirmKeySelection asks user to confirm their key selection
-func (s *InteractiveSelector) confirmKeySelection(ctx context.Context, selection interfaces.KeySelection) (bool, error) {
+func (s *InteractiveSelector) confirmKeySelection(ctx context.Context, selection interfaces.KeySelection, schema interfaces.KindSchema) (bool, error) {
 	fmt.Println("\n=== Key Selection Summary ===")
-	fmt.Printf("Partition Key: %s\n", selection.PartitionKey)
+
+	// Find the partition key field and get its display name
+	partitionDisplayName := selection.PartitionKey
+	for _, field := range schema.Fields {
+		if field.Name == selection.PartitionKey {
+			if field.DisplayName != "" {
+				partitionDisplayName = field.DisplayName
+			}
+			break
+		}
+	}
+	fmt.Printf("Partition Key: %s\n", partitionDisplayName)
+
 	if selection.SortKey != nil {
-		fmt.Printf("Sort Key: %s\n", *selection.SortKey)
+		// Find the sort key field and get its display name
+		sortDisplayName := *selection.SortKey
+		for _, field := range schema.Fields {
+			if field.Name == *selection.SortKey {
+				if field.DisplayName != "" {
+					sortDisplayName = field.DisplayName
+				}
+				break
+			}
+		}
+		fmt.Printf("Sort Key: %s\n", sortDisplayName)
 	} else {
 		fmt.Println("Sort Key: None")
 	}
@@ -337,9 +376,31 @@ func (s *InteractiveSelector) ConfirmMigration(ctx context.Context, configs []in
 	for i, config := range configs {
 		fmt.Printf("%d. %s → %s\n", i+1, config.SourceKind, config.TargetTable)
 		fmt.Printf("   Entities: %d\n", config.Schema.Count)
-		fmt.Printf("   Partition Key: %s\n", config.KeySelection.PartitionKey)
+
+		// Find the partition key field and get its display name
+		partitionDisplayName := config.KeySelection.PartitionKey
+		for _, field := range config.Schema.Fields {
+			if field.Name == config.KeySelection.PartitionKey {
+				if field.DisplayName != "" {
+					partitionDisplayName = field.DisplayName
+				}
+				break
+			}
+		}
+		fmt.Printf("   Partition Key: %s\n", partitionDisplayName)
+
 		if config.KeySelection.SortKey != nil {
-			fmt.Printf("   Sort Key: %s\n", *config.KeySelection.SortKey)
+			// Find the sort key field and get its display name
+			sortDisplayName := *config.KeySelection.SortKey
+			for _, field := range config.Schema.Fields {
+				if field.Name == *config.KeySelection.SortKey {
+					if field.DisplayName != "" {
+						sortDisplayName = field.DisplayName
+					}
+					break
+				}
+			}
+			fmt.Printf("   Sort Key: %s\n", sortDisplayName)
 		} else {
 			fmt.Printf("   Sort Key: None\n")
 		}

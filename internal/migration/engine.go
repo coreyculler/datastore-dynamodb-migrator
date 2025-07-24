@@ -18,6 +18,7 @@ type Engine struct {
 	batchSize       int
 	maxWorkers      int
 	dryRun          bool
+	debug           bool
 	mu              sync.RWMutex
 }
 
@@ -62,6 +63,13 @@ func (e *Engine) SetDryRun(dryRun bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.dryRun = dryRun
+}
+
+// SetDebug sets the debug mode for verbose logging.
+func (e *Engine) SetDebug(debug bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.debug = debug
 }
 
 // ValidateConfig validates a migration configuration
@@ -180,6 +188,9 @@ func (e *Engine) Migrate(ctx context.Context, config interfaces.MigrationConfig,
 				sendProgress(progress)
 				return
 			}
+			if e.debug {
+				fmt.Printf("\nDEBUG: CreateTable failed for Kind %s: %v\n", config.SourceKind, err)
+			}
 			progress.Errors++
 			progress.InProgress = false
 			progress.Completed = true
@@ -210,9 +221,9 @@ func (e *Engine) Migrate(ctx context.Context, config interfaces.MigrationConfig,
 		// In dry-run mode, skip actual entity processing for faster response
 		if dryRun {
 			// Simulate processing without actually reading all entities
-			fmt.Printf("🔍 DRY RUN: Would process %d entities from Kind %s\n", 
+			fmt.Printf("🔍 DRY RUN: Would process %d entities from Kind %s\n",
 				config.Schema.Count, config.SourceKind)
-			
+
 			// Send incremental progress updates to simulate processing
 			batchCount := (config.Schema.Count / int64(batchSize)) + 1
 			for i := int64(0); i < batchCount; i++ {
@@ -263,6 +274,9 @@ func (e *Engine) Migrate(ctx context.Context, config interfaces.MigrationConfig,
 					progress.Completed = true
 					sendProgress(progress)
 					return
+				}
+				if e.debug {
+					fmt.Printf("\nDEBUG: GetEntities failed for Kind %s: %v\n", config.SourceKind, err)
 				}
 				progress.Errors++
 				progress.InProgress = false
@@ -330,7 +344,11 @@ func (e *Engine) processEntitiesWithWorkers(
 						mu.Lock()
 						errors++
 						mu.Unlock()
-						fmt.Printf("Worker %d: Error processing batch: %v\n", workerID, err)
+						if e.debug {
+							fmt.Printf("\nWorker %d: DEBUG - Error processing batch for Kind %s: %v\n", workerID, config.SourceKind, err)
+						} else {
+							fmt.Printf("Worker %d: Error processing batch: %v\n", workerID, err)
+						}
 					}
 
 					mu.Lock()

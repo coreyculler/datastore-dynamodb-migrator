@@ -6,9 +6,10 @@ import (
 
 // FieldInfo represents information about a field in a DataStore entity
 type FieldInfo struct {
-	Name     string      `json:"name"`
-	TypeName string      `json:"type_name"`
-	Sample   interface{} `json:"sample,omitempty"`
+	Name        string      `json:"name"`
+	DisplayName string      `json:"display_name,omitempty"`
+	TypeName    string      `json:"type_name"`
+	Sample      interface{} `json:"sample,omitempty"`
 }
 
 // KindSchema represents the schema information for a DataStore Kind

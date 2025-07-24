@@ -35,6 +35,7 @@ var (
 	maxWorkers  int
 	dryRun      bool
 	interactive bool = true
+	debug       bool
 )
 
 func main() {
@@ -55,6 +56,7 @@ DynamoDB table with user-configured primary and sort keys.`,
 	rootCmd.PersistentFlags().IntVar(&maxWorkers, "max-workers", 5, "Maximum number of concurrent workers")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Show what would be migrated without actually doing it")
 	rootCmd.PersistentFlags().BoolVar(&interactive, "interactive", true, "Use interactive mode for key selection")
+	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "Enable debug logging for detailed error information")
 
 	// Add subcommands
 	rootCmd.AddCommand(listKindsCmd())
@@ -130,6 +132,7 @@ func runMigration(cmd *cobra.Command, args []string) error {
 	engine := migration.NewEngine(datastoreClient, dynamoClient)
 	engine.SetBatchSize(cfg.Migration.BatchSize)
 	engine.SetMaxWorkers(cfg.Migration.MaxWorkers)
+	engine.SetDebug(debug)
 
 	// Set up the analyzer
 	analyzer := introspection.NewEntityAnalyzer()
