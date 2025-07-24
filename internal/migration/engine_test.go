@@ -219,10 +219,10 @@ func (suite *EngineTestSuite) TestMigrate_Success() {
 	defer cancel()
 
 	// Mock expectations
-	suite.mockDynamoDB.On("CreateTable", ctx, config, false).Return(nil)
+	suite.mockDynamoDB.On("CreateTable", mock.AnythingOfType("*context.timerCtx"), config, false).Return(nil)
 
 	entityChan := interfaces.CreateTestEntityChannel(3)
-	suite.mockDataStore.On("GetEntities", ctx, config.SourceKind, 100).Return(entityChan, nil)
+	suite.mockDataStore.On("GetEntities", mock.AnythingOfType("*context.timerCtx"), config.SourceKind, 100).Return(entityChan, nil)
 
 	// Mock entity conversion
 	testEntity := interfaces.CreateTestEntity()
@@ -234,7 +234,7 @@ func (suite *EngineTestSuite) TestMigrate_Success() {
 	suite.mockIntrospector.On("ConvertForDynamoDB", mock.Anything, config).Return(convertedEntity, nil).Times(3)
 
 	// Mock DynamoDB put
-	suite.mockDynamoDB.On("PutItems", ctx, config.TargetTable, mock.Anything, false).Return(nil)
+	suite.mockDynamoDB.On("PutItems", mock.AnythingOfType("*context.cancelCtx"), config.TargetTable, mock.AnythingOfType("[]map[string]interface {}"), false).Return(nil)
 
 	progressChan, err := suite.engine.Migrate(ctx, config, false)
 
@@ -281,7 +281,7 @@ func (suite *EngineTestSuite) TestMigrate_CreateTableError() {
 	defer cancel()
 
 	// Mock table creation failure
-	suite.mockDynamoDB.On("CreateTable", ctx, config, false).Return(fmt.Errorf("table creation failed"))
+	suite.mockDynamoDB.On("CreateTable", mock.AnythingOfType("*context.timerCtx"), config, false).Return(fmt.Errorf("table creation failed"))
 
 	progressChan, err := suite.engine.Migrate(ctx, config, false)
 
@@ -320,10 +320,10 @@ func (suite *EngineTestSuite) TestMigrate_GetEntitiesError() {
 	defer cancel()
 
 	// Mock successful table creation
-	suite.mockDynamoDB.On("CreateTable", ctx, config, false).Return(nil)
+	suite.mockDynamoDB.On("CreateTable", mock.AnythingOfType("*context.timerCtx"), config, false).Return(nil)
 
 	// Mock GetEntities failure
-	suite.mockDataStore.On("GetEntities", ctx, config.SourceKind, 100).Return(nil, fmt.Errorf("failed to get entities"))
+	suite.mockDataStore.On("GetEntities", mock.AnythingOfType("*context.timerCtx"), config.SourceKind, 100).Return(nil, fmt.Errorf("failed to get entities"))
 
 	progressChan, err := suite.engine.Migrate(ctx, config, false)
 
@@ -361,34 +361,24 @@ func (suite *EngineTestSuite) TestMigrate_DryRun() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Mock expectations for dry run
-	suite.mockDynamoDB.On("CreateTable", ctx, config, true).Return(nil)
+	// Mock expectations for dry run - only CreateTable is called in dry-run mode
+	suite.mockDynamoDB.On("CreateTable", mock.AnythingOfType("*context.timerCtx"), config, true).Return(nil)
 
-	entityChan := interfaces.CreateTestEntityChannel(2)
-	suite.mockDataStore.On("GetEntities", ctx, config.SourceKind, 100).Return(entityChan, nil)
-
-	// Mock entity conversion
-	testEntity := interfaces.CreateTestEntity()
-	convertedEntity := map[string]interface{}{
-		"id":   testEntity["id"],
-		"name": testEntity["name"],
-	}
-	suite.mockIntrospector.On("ConvertForDynamoDB", mock.Anything, config).Return(convertedEntity, nil).Times(2)
-
-	// Mock DynamoDB put with dry run
-	suite.mockDynamoDB.On("PutItems", ctx, config.TargetTable, mock.Anything, true).Return(nil)
+	// In the new dry-run implementation, GetEntities, ConvertForDynamoDB, and PutItems 
+	// are NOT called - the process is simulated for faster response
 
 	progressChan, err := suite.engine.Migrate(ctx, config, true)
 
 	assert.NoError(suite.T(), err)
 	assert.NotNil(suite.T(), progressChan)
 
-	// Wait for completion with timeout
+	// Collect progress updates to verify simulation behavior
+	var progressList []interfaces.MigrationProgress
 	done := make(chan bool)
 	go func() {
 		defer close(done)
-		for range progressChan {
-			// Consume all progress updates
+		for progress := range progressChan {
+			progressList = append(progressList, progress)
 		}
 	}()
 
@@ -398,6 +388,16 @@ func (suite *EngineTestSuite) TestMigrate_DryRun() {
 	case <-ctx.Done():
 		suite.T().Fatal("Test timed out waiting for migration completion")
 	}
+
+	// Verify we got progress updates from the simulation
+	assert.Greater(suite.T(), len(progressList), 0)
+	
+	// Verify the final progress shows completion
+	finalProgress := progressList[len(progressList)-1]
+	assert.Equal(suite.T(), config.SourceKind, finalProgress.Kind)
+	assert.True(suite.T(), finalProgress.Completed)
+	assert.False(suite.T(), finalProgress.InProgress)
+	assert.Equal(suite.T(), config.Schema.Count, finalProgress.Processed)
 }
 
 func (suite *EngineTestSuite) TestMigrateAll_Success() {
@@ -410,10 +410,10 @@ func (suite *EngineTestSuite) TestMigrateAll_Success() {
 
 	// Mock expectations for both configs
 	for _, config := range configs {
-		suite.mockDynamoDB.On("CreateTable", ctx, config, false).Return(nil)
+		suite.mockDynamoDB.On("CreateTable", mock.AnythingOfType("*context.timerCtx"), config, false).Return(nil)
 
 		entityChan := interfaces.CreateTestEntityChannel(2)
-		suite.mockDataStore.On("GetEntities", ctx, config.SourceKind, 100).Return(entityChan, nil)
+		suite.mockDataStore.On("GetEntities", mock.AnythingOfType("*context.timerCtx"), config.SourceKind, 100).Return(entityChan, nil)
 
 		// Create appropriate converted entity based on the config
 		var convertedEntity map[string]interface{}
@@ -430,7 +430,7 @@ func (suite *EngineTestSuite) TestMigrateAll_Success() {
 		}
 
 		suite.mockIntrospector.On("ConvertForDynamoDB", mock.Anything, config).Return(convertedEntity, nil).Times(2)
-		suite.mockDynamoDB.On("PutItems", ctx, config.TargetTable, mock.Anything, false).Return(nil)
+		suite.mockDynamoDB.On("PutItems", mock.AnythingOfType("*context.cancelCtx"), config.TargetTable, mock.AnythingOfType("[]map[string]interface {}"), false).Return(nil)
 	}
 
 	progressChan, err := suite.engine.MigrateAll(ctx, configs, false)

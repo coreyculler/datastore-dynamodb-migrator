@@ -112,6 +112,76 @@ func (suite *AnalyzerTestSuite) TestGetFieldValue_StructEntity() {
 	assert.Nil(suite.T(), suite.analyzer.GetFieldValue(entity, "NonExistent"))
 }
 
+// TestEntityWithToMap is a helper type for testing EntityWithKey functionality
+type TestEntityWithToMap struct {
+	data map[string]interface{}
+}
+
+func (e TestEntityWithToMap) ToMap() map[string]interface{} {
+	return e.data
+}
+
+func (suite *AnalyzerTestSuite) TestGetFieldValue_EntityWithKey() {
+	entity := TestEntityWithToMap{
+		data: map[string]interface{}{
+			"__key_name__": "test_entity",
+			"__key_id__":   int64(123),
+			"__key__":      "mock_key_string",
+			"name":         "John Doe",
+			"age":          30,
+		},
+	}
+
+	// Test key field extraction - should use key name first
+	keyValue := suite.analyzer.GetFieldValue(entity, "id")
+	assert.Equal(suite.T(), "test_entity", keyValue)
+
+	// Test regular property fields
+	assert.Equal(suite.T(), "John Doe", suite.analyzer.GetFieldValue(entity, "name"))
+	assert.Equal(suite.T(), 30, suite.analyzer.GetFieldValue(entity, "age"))
+
+	// Test non-existing field
+	assert.Nil(suite.T(), suite.analyzer.GetFieldValue(entity, "NonExistent"))
+}
+
+func (suite *AnalyzerTestSuite) TestGetFieldValue_EntityWithKeyIDOnly() {
+	entity := TestEntityWithToMap{
+		data: map[string]interface{}{
+			"__key_id__": int64(456),
+			"__key__":    "mock_key_string",
+			"name":       "Jane Doe",
+		},
+	}
+
+	// Test key field extraction - should use key ID when name is not available
+	keyValue := suite.analyzer.GetFieldValue(entity, "id")
+	assert.Equal(suite.T(), "456", keyValue)
+
+	// Test regular property fields
+	assert.Equal(suite.T(), "Jane Doe", suite.analyzer.GetFieldValue(entity, "name"))
+}
+
+func (suite *AnalyzerTestSuite) TestGetFieldValue_EntityWithKeyConflict() {
+	// Test when entity already has an "id" field - should use "__key__" for DataStore key
+	entity := TestEntityWithToMap{
+		data: map[string]interface{}{
+			"__key_name__": "datastore_entity",
+			"__key_id__":   int64(789),
+			"__key__":      "mock_key_string",
+			"id":           "user_defined_id", // This conflicts with DataStore key
+			"name":         "Test Entity",
+		},
+	}
+
+	// Test __key__ field extraction when id field exists
+	keyValue := suite.analyzer.GetFieldValue(entity, "__key__")
+	assert.Equal(suite.T(), "datastore_entity", keyValue)
+
+	// Test that regular id field still works
+	idValue := suite.analyzer.GetFieldValue(entity, "id")
+	assert.Equal(suite.T(), "user_defined_id", idValue)
+}
+
 func (suite *AnalyzerTestSuite) TestConvertForDynamoDB_SimpleEntity() {
 	// Use a struct entity since that's what the analyzer is designed for
 	type UserEntity struct {

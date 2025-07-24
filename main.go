@@ -6,7 +6,9 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -69,13 +71,33 @@ func runMigration(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle graceful shutdown
+	// Handle graceful shutdown with timeout
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	shutdownStarted := false
+	var shutdownMu sync.Mutex
+
 	go func() {
 		<-sigChan
+		shutdownMu.Lock()
+		if shutdownStarted {
+			shutdownMu.Unlock()
+			fmt.Println("\nForce terminating...")
+			os.Exit(1)
+		}
+		shutdownStarted = true
+		shutdownMu.Unlock()
+
 		fmt.Println("\nReceived interrupt signal, shutting down gracefully...")
+		fmt.Println("Press Ctrl+C again to force terminate")
 		cancel()
+
+		// Force termination after 30 seconds
+		go func() {
+			time.Sleep(30 * time.Second)
+			fmt.Println("\nGraceful shutdown timeout, force terminating...")
+			os.Exit(1)
+		}()
 	}()
 
 	// Load configuration
@@ -117,7 +139,20 @@ func runMigration(cmd *cobra.Command, args []string) error {
 	fmt.Println("📋 Discovering DataStore Kinds...")
 	kinds, err := datastoreClient.ListKinds(ctx)
 	if err != nil {
+		// Check if error is due to context cancellation
+		if ctx.Err() != nil {
+			fmt.Println("\nOperation cancelled by user")
+			return nil
+		}
 		return fmt.Errorf("failed to list DataStore kinds: %w", err)
+	}
+
+	// Check for cancellation after listing kinds
+	select {
+	case <-ctx.Done():
+		fmt.Println("\nOperation cancelled by user")
+		return nil
+	default:
 	}
 
 	if len(kinds) == 0 {
@@ -132,12 +167,33 @@ func runMigration(cmd *cobra.Command, args []string) error {
 	selector := cli.NewInteractiveSelector()
 
 	for _, kind := range kinds {
+		// Check for cancellation at the beginning of each table processing
+		select {
+		case <-ctx.Done():
+			fmt.Println("\nOperation cancelled by user")
+			return nil
+		default:
+		}
+
 		fmt.Printf("🔍 Analyzing Kind: %s...\n", kind)
 
 		schema, err := datastoreClient.AnalyzeKind(ctx, kind)
 		if err != nil {
+			// Check if error is due to context cancellation
+			if ctx.Err() != nil {
+				fmt.Println("\nOperation cancelled by user")
+				return nil
+			}
 			fmt.Printf("❌ Failed to analyze Kind %s: %v\n", kind, err)
 			continue
+		}
+
+		// Check for cancellation after analysis
+		select {
+		case <-ctx.Done():
+			fmt.Println("\nOperation cancelled by user")
+			return nil
+		default:
 		}
 
 		if schema.Count == 0 {
@@ -152,16 +208,40 @@ func runMigration(cmd *cobra.Command, args []string) error {
 
 		// Interactive key selection
 		if interactive {
-			keySelection, err := selector.SelectKeys(*schema)
+			// Ask if user wants to skip this Kind
+			skipKind, err := selector.AskToSkipKind(ctx, *schema)
 			if err != nil {
+				if ctx.Err() != nil {
+					fmt.Println("\nOperation cancelled by user")
+					return nil
+				}
+				fmt.Printf("❌ Failed to get user choice for Kind %s: %v\n", kind, err)
+				continue
+			}
+
+			if skipKind {
+				fmt.Printf("⏭️  Skipping Kind: %s\n\n", kind)
+				continue
+			}
+
+			keySelection, err := selector.SelectKeys(ctx, *schema)
+			if err != nil {
+				if ctx.Err() != nil {
+					fmt.Println("\nOperation cancelled by user")
+					return nil
+				}
 				fmt.Printf("❌ Failed to select keys for Kind %s: %v\n", kind, err)
 				continue
 			}
 
 			// Get target table name
 			defaultTableName := kind
-			tableName, err := selector.SelectTargetTableName(defaultTableName)
+			tableName, err := selector.SelectTargetTableName(ctx, defaultTableName)
 			if err != nil {
+				if ctx.Err() != nil {
+					fmt.Println("\nOperation cancelled by user")
+					return nil
+				}
 				fmt.Printf("❌ Failed to get table name for Kind %s: %v\n", kind, err)
 				continue
 			}
@@ -192,6 +272,14 @@ func runMigration(cmd *cobra.Command, args []string) error {
 
 			migrationConfigs = append(migrationConfigs, config)
 		}
+
+		// Check for cancellation after configuration is built
+		select {
+		case <-ctx.Done():
+			fmt.Println("\nOperation cancelled by user")
+			return nil
+		default:
+		}
 	}
 
 	if len(migrationConfigs) == 0 {
@@ -201,8 +289,12 @@ func runMigration(cmd *cobra.Command, args []string) error {
 
 	// Confirm migration plan
 	if interactive && !dryRun {
-		confirmed, err := selector.ConfirmMigration(migrationConfigs)
+		confirmed, err := selector.ConfirmMigration(ctx, migrationConfigs)
 		if err != nil {
+			if ctx.Err() != nil {
+				fmt.Println("\nOperation cancelled by user")
+				return nil
+			}
 			return fmt.Errorf("failed to confirm migration: %w", err)
 		}
 
@@ -230,27 +322,38 @@ func runMigration(cmd *cobra.Command, args []string) error {
 	completed := make(map[string]bool)
 	var totalErrors int64
 
-	for progress := range progressChan {
-		if interactive {
-			selector.ShowMigrationProgress(progress)
-		} else {
-			if dryRun {
-				fmt.Printf("DRY RUN - Kind %s: %d/%d analyzed, %d errors\n",
-					progress.Kind, progress.Processed, progress.Total, progress.Errors)
-			} else {
-				fmt.Printf("Kind %s: %d/%d processed, %d errors\n",
-					progress.Kind, progress.Processed, progress.Total, progress.Errors)
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println("\nMigration interrupted")
+			return nil
+		case progress, ok := <-progressChan:
+			if !ok {
+				// Channel closed, migration completed or stopped
+				break
 			}
-		}
 
-		if progress.Completed {
-			completed[progress.Kind] = true
-			totalErrors += progress.Errors
-		}
+			if interactive {
+				selector.ShowMigrationProgress(progress)
+			} else {
+				if dryRun {
+					fmt.Printf("DRY RUN - Kind %s: %d/%d analyzed, %d errors\n",
+						progress.Kind, progress.Processed, progress.Total, progress.Errors)
+				} else {
+					fmt.Printf("Kind %s: %d/%d processed, %d errors\n",
+						progress.Kind, progress.Processed, progress.Total, progress.Errors)
+				}
+			}
 
-		// Check if all migrations are complete
-		if len(completed) == len(migrationConfigs) {
-			break
+			if progress.Completed {
+				completed[progress.Kind] = true
+				totalErrors += progress.Errors
+			}
+
+			// Check if all migrations are complete
+			if len(completed) == len(migrationConfigs) {
+				break
+			}
 		}
 	}
 

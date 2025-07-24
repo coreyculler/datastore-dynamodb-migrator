@@ -108,6 +108,44 @@ func (a *EntityAnalyzer) GetFieldValue(entity interface{}, fieldName string) int
 		return nil
 	}
 
+	// Handle EntityWithKey from datastore
+	if entityWithKey, ok := entity.(interface {
+		ToMap() map[string]interface{}
+	}); ok {
+		entityMap := entityWithKey.ToMap()
+
+		// For regular properties, get from the map first
+		if value, exists := entityMap[fieldName]; exists {
+			// If this is not an internal DataStore field, return it
+			if !strings.HasPrefix(fieldName, "__") {
+				return value
+			}
+		}
+
+		// Handle DataStore key identifier fields (id or __key__) when no regular property exists
+		if fieldName == "id" || fieldName == "__key__" {
+			// Only extract from key if there's no regular property with this name
+			if _, exists := entityMap[fieldName]; !exists || strings.HasPrefix(fieldName, "__") {
+				if keyName, exists := entityMap["__key_name__"]; exists && keyName != "" {
+					return keyName
+				}
+				if keyID, exists := entityMap["__key_id__"]; exists && keyID != 0 {
+					return fmt.Sprintf("%v", keyID)
+				}
+				if keyStr, exists := entityMap["__key__"]; exists {
+					return keyStr
+				}
+			}
+		}
+
+		// For internal DataStore fields, return from the map
+		if strings.HasPrefix(fieldName, "__") {
+			if value, exists := entityMap[fieldName]; exists {
+				return value
+			}
+		}
+	}
+
 	val := reflect.ValueOf(entity)
 	if val.Kind() == reflect.Ptr {
 		if val.IsNil() {
@@ -144,6 +182,49 @@ func (a *EntityAnalyzer) ConvertForDynamoDB(entity interface{}, config interface
 		return nil, fmt.Errorf("entity is nil")
 	}
 
+	result := make(map[string]interface{})
+
+	// Handle EntityWithKey from datastore
+	if entityWithKey, ok := entity.(interface {
+		ToMap() map[string]interface{}
+	}); ok {
+		entityMap := entityWithKey.ToMap()
+
+		// Process all fields from the entity map
+		for fieldName, value := range entityMap {
+			// Skip internal datastore fields (they start with __)
+			if strings.HasPrefix(fieldName, "__") {
+				continue
+			}
+
+			// Convert the value to DynamoDB-compatible format
+			convertedValue, err := a.convertValueForDynamoDB(value)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert field %s: %w", fieldName, err)
+			}
+
+			result[fieldName] = convertedValue
+		}
+
+		// Add the DataStore key identifier field
+		// Try "id" first, then "__key__" as fallback
+		keyFieldName := "id"
+		if _, exists := result["id"]; exists {
+			keyFieldName = "__key__"
+		}
+
+		keyValue := a.GetFieldValue(entity, keyFieldName)
+		if keyValue != nil {
+			convertedValue, err := a.convertValueForDynamoDB(keyValue)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert key field %s: %w", keyFieldName, err)
+			}
+			result[keyFieldName] = convertedValue
+		}
+
+		return result, nil
+	}
+
 	val := reflect.ValueOf(entity)
 	if val.Kind() == reflect.Ptr {
 		if val.IsNil() {
@@ -151,8 +232,6 @@ func (a *EntityAnalyzer) ConvertForDynamoDB(entity interface{}, config interface
 		}
 		val = val.Elem()
 	}
-
-	result := make(map[string]interface{})
 
 	if val.Kind() != reflect.Struct {
 		// For non-struct types, use the partition key as the field name

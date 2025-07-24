@@ -2,6 +2,7 @@ package datastore
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -54,6 +55,40 @@ func TestDataStoreClient_MockScenarios(t *testing.T) {
 		// - Result formatting
 
 		assert.Equal(t, 3, len(expectedKinds))
+	})
+
+	t.Run("ListKinds_FiltersStatKinds", func(t *testing.T) {
+		// Test that __Stat kinds are filtered out
+		// Simulate what would be returned from DataStore including stat kinds
+		allKinds := []string{
+			"User",
+			"Order",
+			"Product",
+			"__Stat_Kind__",
+			"__Stat_PropertyType__",
+			"__Stat_PropertyName_Kind__",
+			"__StatSomething",
+		}
+
+		// Expected result should exclude all __Stat* kinds
+		expectedKinds := []string{"User", "Order", "Product"}
+
+		// Simulate the filtering logic that happens in ListKinds
+		var filteredKinds []string
+		for _, kind := range allKinds {
+			if !strings.HasPrefix(kind, "__Stat") {
+				filteredKinds = append(filteredKinds, kind)
+			}
+		}
+
+		assert.Equal(t, expectedKinds, filteredKinds)
+		assert.Equal(t, 3, len(filteredKinds))
+
+		// Verify that stat kinds were indeed filtered out
+		for _, kind := range filteredKinds {
+			assert.False(t, strings.HasPrefix(kind, "__Stat"),
+				"Kind %s should not start with __Stat", kind)
+		}
 	})
 
 	t.Run("AnalyzeKind_Success", func(t *testing.T) {

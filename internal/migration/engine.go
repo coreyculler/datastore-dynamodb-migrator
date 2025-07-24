@@ -139,6 +139,17 @@ func (e *Engine) Migrate(ctx context.Context, config interfaces.MigrationConfig,
 	go func() {
 		defer close(progressChan)
 
+		// Helper function to send progress non-blocking
+		sendProgress := func(progress interfaces.MigrationProgress) {
+			select {
+			case progressChan <- progress:
+			case <-ctx.Done():
+				return
+			default:
+				// Channel is full, skip this update
+			}
+		}
+
 		// Send initial progress
 		progress := interfaces.MigrationProgress{
 			Kind:       config.SourceKind,
@@ -148,34 +159,126 @@ func (e *Engine) Migrate(ctx context.Context, config interfaces.MigrationConfig,
 			InProgress: true,
 			Completed:  false,
 		}
-		progressChan <- progress
+		sendProgress(progress)
+
+		// Check for early cancellation
+		select {
+		case <-ctx.Done():
+			progress.InProgress = false
+			progress.Completed = true
+			sendProgress(progress)
+			return
+		default:
+		}
 
 		// Create DynamoDB table
 		if err := e.dynamoClient.CreateTable(ctx, config, dryRun); err != nil {
+			// Check if error is due to context cancellation
+			if ctx.Err() != nil {
+				progress.InProgress = false
+				progress.Completed = true
+				sendProgress(progress)
+				return
+			}
 			progress.Errors++
 			progress.InProgress = false
 			progress.Completed = true
-			progressChan <- progress
+			sendProgress(progress)
 			return
 		}
 
-		// Get entities from DataStore
-		entityChan, err := e.datastoreClient.GetEntities(ctx, config.SourceKind, batchSize)
-		if err != nil {
-			progress.Errors++
+		// Check for cancellation after table creation
+		select {
+		case <-ctx.Done():
 			progress.InProgress = false
 			progress.Completed = true
-			progressChan <- progress
+			sendProgress(progress)
 			return
+		default:
 		}
 
-		// Process entities in batches using workers
-		e.processEntitiesWithWorkers(ctx, entityChan, config, progressChan, batchSize, maxWorkers, analyzer, dryRun)
+		// Check for cancellation before processing entities
+		select {
+		case <-ctx.Done():
+			progress.InProgress = false
+			progress.Completed = true
+			sendProgress(progress)
+			return
+		default:
+		}
+
+		// In dry-run mode, skip actual entity processing for faster response
+		if dryRun {
+			// Simulate processing without actually reading all entities
+			fmt.Printf("🔍 DRY RUN: Would process %d entities from Kind %s\n", 
+				config.Schema.Count, config.SourceKind)
+			
+			// Send incremental progress updates to simulate processing
+			batchCount := (config.Schema.Count / int64(batchSize)) + 1
+			for i := int64(0); i < batchCount; i++ {
+				// Check for cancellation frequently during simulation
+				select {
+				case <-ctx.Done():
+					progress.InProgress = false
+					progress.Completed = true
+					sendProgress(progress)
+					return
+				default:
+				}
+
+				processed := (i + 1) * int64(batchSize)
+				if processed > config.Schema.Count {
+					processed = config.Schema.Count
+				}
+
+				// Update the outer progress variable so final progress is correct
+				progress = interfaces.MigrationProgress{
+					Kind:       config.SourceKind,
+					Processed:  processed,
+					Total:      config.Schema.Count,
+					Errors:     0,
+					InProgress: processed < config.Schema.Count,
+					Completed:  processed >= config.Schema.Count,
+				}
+				sendProgress(progress)
+
+				// Small delay to simulate processing but allow fast cancellation
+				select {
+				case <-ctx.Done():
+					progress.InProgress = false
+					progress.Completed = true
+					sendProgress(progress)
+					return
+				case <-time.After(10 * time.Millisecond):
+					// Continue simulation
+				}
+			}
+		} else {
+			// Normal mode: actually process entities
+			entityChan, err := e.datastoreClient.GetEntities(ctx, config.SourceKind, batchSize)
+			if err != nil {
+				// Check if error is due to context cancellation
+				if ctx.Err() != nil {
+					progress.InProgress = false
+					progress.Completed = true
+					sendProgress(progress)
+					return
+				}
+				progress.Errors++
+				progress.InProgress = false
+				progress.Completed = true
+				sendProgress(progress)
+				return
+			}
+
+			// Process entities in batches using workers
+			e.processEntitiesWithWorkers(ctx, entityChan, config, progressChan, batchSize, maxWorkers, analyzer, dryRun)
+		}
 
 		// Send final progress
 		progress.InProgress = false
 		progress.Completed = true
-		progressChan <- progress
+		sendProgress(progress)
 	}()
 
 	return progressChan, nil
@@ -200,40 +303,59 @@ func (e *Engine) processEntitiesWithWorkers(
 	var processed, errors int64
 	var mu sync.Mutex
 
+	// Create a context for workers that can be cancelled
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	defer cancelWorkers()
+
 	// Start workers
 	for i := 0; i < maxWorkers; i++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
 
-			for batch := range workChan {
-				if err := e.processBatch(ctx, batch, config, analyzer, dryRun); err != nil {
-					mu.Lock()
-					errors++
-					mu.Unlock()
-					fmt.Printf("Worker %d: Error processing batch: %v\n", workerID, err)
-				}
-
-				mu.Lock()
-				processed += int64(len(batch))
-				currentProcessed := processed
-				currentErrors := errors
-				mu.Unlock()
-
-				// Send progress update
-				progress := interfaces.MigrationProgress{
-					Kind:       config.SourceKind,
-					Processed:  currentProcessed,
-					Total:      config.Schema.Count,
-					Errors:     currentErrors,
-					InProgress: true,
-					Completed:  false,
-				}
-
+			for {
 				select {
-				case progressChan <- progress:
-				case <-ctx.Done():
+				case <-workerCtx.Done():
 					return
+				case batch, ok := <-workChan:
+					if !ok {
+						return
+					}
+
+					if err := e.processBatch(workerCtx, batch, config, analyzer, dryRun); err != nil {
+						// Check if error is due to context cancellation
+						if workerCtx.Err() != nil {
+							return
+						}
+						mu.Lock()
+						errors++
+						mu.Unlock()
+						fmt.Printf("Worker %d: Error processing batch: %v\n", workerID, err)
+					}
+
+					mu.Lock()
+					processed += int64(len(batch))
+					currentProcessed := processed
+					currentErrors := errors
+					mu.Unlock()
+
+					// Send progress update with non-blocking send
+					progress := interfaces.MigrationProgress{
+						Kind:       config.SourceKind,
+						Processed:  currentProcessed,
+						Total:      config.Schema.Count,
+						Errors:     currentErrors,
+						InProgress: true,
+						Completed:  false,
+					}
+
+					select {
+					case progressChan <- progress:
+					case <-workerCtx.Done():
+						return
+					default:
+						// Progress channel full, continue anyway
+					}
 				}
 			}
 		}(i)
@@ -245,31 +367,52 @@ func (e *Engine) processEntitiesWithWorkers(
 
 		var batch []interface{}
 
-		for entity := range entityChan {
-			batch = append(batch, entity)
-
-			if len(batch) >= batchSize {
-				select {
-				case workChan <- batch:
-					batch = nil
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-
-		// Send remaining entities
-		if len(batch) > 0 {
+		for {
 			select {
-			case workChan <- batch:
 			case <-ctx.Done():
 				return
+			case entity, ok := <-entityChan:
+				if !ok {
+					// Channel closed, send remaining batch
+					if len(batch) > 0 {
+						select {
+						case workChan <- batch:
+						case <-ctx.Done():
+							return
+						}
+					}
+					return
+				}
+
+				batch = append(batch, entity)
+
+				if len(batch) >= batchSize {
+					select {
+					case workChan <- batch:
+						batch = nil
+					case <-ctx.Done():
+						return
+					}
+				}
 			}
 		}
 	}()
 
-	// Wait for all workers to complete
-	wg.Wait()
+	// Wait for all workers to complete or context cancellation
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// All workers completed normally
+	case <-ctx.Done():
+		// Context cancelled, cancel workers and wait for them to exit
+		cancelWorkers()
+		<-done
+	}
 }
 
 // processBatch processes a batch of entities
@@ -351,14 +494,35 @@ func (e *Engine) MigrateAll(ctx context.Context, configs []interfaces.MigrationC
 
 		var wg sync.WaitGroup
 
+		// Helper function to send progress non-blocking
+		sendProgress := func(progress interfaces.MigrationProgress) {
+			select {
+			case combinedProgress <- progress:
+			case <-ctx.Done():
+			default:
+				// Channel is full, skip this update
+			}
+		}
+
 		// Start migration for each configuration
 		for _, config := range configs {
+			// Check for cancellation before starting each migration
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
 			wg.Add(1)
 			go func(cfg interfaces.MigrationConfig) {
 				defer wg.Done()
 
 				progressChan, err := e.Migrate(ctx, cfg, dryRun)
 				if err != nil {
+					// Check if error is due to context cancellation
+					if ctx.Err() != nil {
+						return
+					}
 					// Send error as a completed migration with errors
 					errorProgress := interfaces.MigrationProgress{
 						Kind:       cfg.SourceKind,
@@ -368,23 +532,46 @@ func (e *Engine) MigrateAll(ctx context.Context, configs []interfaces.MigrationC
 						InProgress: false,
 						Completed:  true,
 					}
-					combinedProgress <- errorProgress
+					sendProgress(errorProgress)
 					return
 				}
 
-				// Forward progress updates
-				for progress := range progressChan {
+				// Forward progress updates with context cancellation
+				for {
 					select {
-					case combinedProgress <- progress:
 					case <-ctx.Done():
-						return
+						return // Exit if the main context is cancelled
+					case progress, ok := <-progressChan:
+						if !ok {
+							// Channel closed, migration for this config is done
+							return
+						}
+						// Check for cancellation before forwarding each update
+						select {
+						case <-ctx.Done():
+							return
+						default:
+						}
+						sendProgress(progress)
 					}
 				}
 			}(config)
 		}
 
-		// Wait for all migrations to complete
-		wg.Wait()
+		// Wait for all migrations to complete or context cancellation
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// All migrations completed normally
+		case <-ctx.Done():
+			// Context cancelled, wait for goroutines to exit
+			<-done
+		}
 	}()
 
 	return combinedProgress, nil

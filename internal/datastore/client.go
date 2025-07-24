@@ -3,6 +3,7 @@ package datastore
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"datastore-dynamodb-migrator/internal/interfaces"
@@ -48,9 +49,14 @@ func (c *Client) ListKinds(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("failed to query kinds: %w", err)
 	}
 
-	kinds := make([]string, len(keys))
-	for i, key := range keys {
-		kinds[i] = key.Name
+	// Filter out special DataStore kinds that begin with "__Stat"
+	var kinds []string
+	for _, key := range keys {
+		kindName := key.Name
+		// Skip special DataStore statistics kinds
+		if !strings.HasPrefix(kindName, "__Stat") {
+			kinds = append(kinds, kindName)
+		}
 	}
 
 	return kinds, nil
@@ -125,10 +131,33 @@ func (c *Client) AnalyzeKind(ctx context.Context, kind string) (*interfaces.Kind
 		}
 	}
 
-	// Convert map to slice
+	// Add the DataStore key identifier field
+	// Check if there's already an "id" field, if so use a different name
+	keyFieldName := "id"
+	if _, exists := fieldMap["id"]; exists {
+		keyFieldName = "__key__"
+	}
+
+	// Add the key identifier field - this represents the DataStore entity key
+	fieldMap[keyFieldName] = interfaces.FieldInfo{
+		Name:     keyFieldName,
+		TypeName: "string",
+		Sample:   c.getKeyIdentifierSample(keys),
+	}
+
+	// Convert map to slice, ensuring the key field is first (for default selection)
 	fields := make([]interfaces.FieldInfo, 0, len(fieldMap))
-	for _, field := range fieldMap {
-		fields = append(fields, field)
+
+	// Add the key field first
+	if keyField, exists := fieldMap[keyFieldName]; exists {
+		fields = append(fields, keyField)
+	}
+
+	// Add remaining fields
+	for fieldName, field := range fieldMap {
+		if fieldName != keyFieldName {
+			fields = append(fields, field)
+		}
 	}
 
 	return &interfaces.KindSchema{
@@ -160,6 +189,13 @@ func (c *Client) GetEntities(ctx context.Context, kind string, batchSize int) (<
 		cursor := ""
 
 		for {
+			// Check for context cancellation before each batch
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
 			// Apply cursor if we have one
 			if cursor != "" {
 				decodedCursor, err := datastore.DecodeCursor(cursor)
@@ -177,6 +213,10 @@ func (c *Client) GetEntities(ctx context.Context, kind string, batchSize int) (<
 			var entities []datastore.PropertyList
 			keys, err := c.client.GetAll(ctx, batchQuery, &entities)
 			if err != nil {
+				// Check if error is due to context cancellation
+				if ctx.Err() != nil {
+					return
+				}
 				fmt.Printf("Error fetching entities: %v\n", err)
 				return
 			}
@@ -203,11 +243,25 @@ func (c *Client) GetEntities(ctx context.Context, kind string, batchSize int) (<
 				break
 			}
 
+			// Check for context cancellation before getting next cursor
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
 			// Get cursor for next batch
 			lastKey := keys[len(keys)-1]
 			nextCursor := datastore.NewQuery(kind).Filter("__key__ >", lastKey).Limit(1)
 			nextKeys, err := c.client.GetAll(ctx, nextCursor.KeysOnly(), nil)
-			if err != nil || len(nextKeys) == 0 {
+			if err != nil {
+				// Check if error is due to context cancellation
+				if ctx.Err() != nil {
+					return
+				}
+				break
+			}
+			if len(nextKeys) == 0 {
 				break
 			}
 			cursor = nextKeys[0].String()
@@ -277,4 +331,21 @@ func (c *Client) getPropertyTypeName(prop datastore.Property) string {
 	default:
 		return fmt.Sprintf("%T", prop.Value)
 	}
+}
+
+// getKeyIdentifierSample returns a sample key identifier from the provided keys
+func (c *Client) getKeyIdentifierSample(keys []*datastore.Key) string {
+	if len(keys) == 0 {
+		return "key_identifier"
+	}
+
+	// Use the first key as a sample
+	key := keys[0]
+	if key.Name != "" {
+		return key.Name
+	}
+	if key.ID != 0 {
+		return fmt.Sprintf("%d", key.ID)
+	}
+	return "key_identifier"
 }

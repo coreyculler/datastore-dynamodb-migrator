@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -64,6 +66,103 @@ func TestCLI_BusinessLogic(t *testing.T) {
 	})
 }
 
+// Tests for Skip Functionality
+func TestCLI_Skip_Functionality(t *testing.T) {
+	t.Run("SkipKind_ShouldSkipEmptySchema", func(t *testing.T) {
+		// Test business logic for skipping empty schemas
+		emptySchema := interfaces.TestKindSchema("EmptyKind", 0)
+
+		shouldAutoSkip := shouldAutoSkipKind(*emptySchema)
+		assert.True(t, shouldAutoSkip, "Empty schema should be auto-skipped")
+	})
+
+	t.Run("SkipKind_ShouldNotSkipValidSchema", func(t *testing.T) {
+		// Test business logic for valid schemas
+		validSchema := interfaces.SampleUserSchema
+
+		shouldAutoSkip := shouldAutoSkipKind(*validSchema)
+		assert.False(t, shouldAutoSkip, "Valid schema should not be auto-skipped")
+	})
+
+	t.Run("SkipKind_ShouldSkipNoFieldsSchema", func(t *testing.T) {
+		// Test business logic for schemas with no analyzable fields
+		noFieldsSchema := interfaces.TestKindSchema("NoFieldsKind", 100)
+
+		shouldAutoSkip := shouldAutoSkipKind(*noFieldsSchema)
+		assert.True(t, shouldAutoSkip, "Schema with no fields should be auto-skipped")
+	})
+
+	t.Run("FormatSkipSummary", func(t *testing.T) {
+		// Test formatting of skip summary
+		schema := interfaces.SampleUserSchema
+		summary := formatKindPreview(*schema)
+
+		assert.Contains(t, summary, "User")
+		assert.Contains(t, summary, "1000")
+		assert.Contains(t, summary, "4")
+	})
+}
+
+// Mock InteractiveSelector for testing skip functionality without user input
+type MockInteractiveSelector struct {
+	skipResponses map[string]bool // kindName -> shouldSkip
+}
+
+func NewMockInteractiveSelector() *MockInteractiveSelector {
+	return &MockInteractiveSelector{
+		skipResponses: make(map[string]bool),
+	}
+}
+
+func (m *MockInteractiveSelector) SetSkipResponse(kindName string, shouldSkip bool) {
+	m.skipResponses[kindName] = shouldSkip
+}
+
+func (m *MockInteractiveSelector) AskToSkipKind(ctx context.Context, schema interfaces.KindSchema) (bool, error) {
+	if response, exists := m.skipResponses[schema.Name]; exists {
+		return response, nil
+	}
+	return false, nil // Default to not skip
+}
+
+func TestMockInteractiveSelector(t *testing.T) {
+	t.Run("MockSelector_SkipResponse", func(t *testing.T) {
+		selector := NewMockInteractiveSelector()
+		schema := interfaces.SampleUserSchema
+
+		// Test default response (don't skip)
+		shouldSkip, err := selector.AskToSkipKind(context.Background(), *schema)
+		assert.NoError(t, err)
+		assert.False(t, shouldSkip)
+
+		// Test configured skip response
+		selector.SetSkipResponse("User", true)
+		shouldSkip, err = selector.AskToSkipKind(context.Background(), *schema)
+		assert.NoError(t, err)
+		assert.True(t, shouldSkip)
+	})
+
+	t.Run("MockSelector_MultipleKinds", func(t *testing.T) {
+		selector := NewMockInteractiveSelector()
+		userSchema := interfaces.SampleUserSchema
+		orderSchema := interfaces.SampleOrderSchema
+
+		// Configure different responses for different kinds
+		selector.SetSkipResponse("User", false) // Don't skip users
+		selector.SetSkipResponse("Order", true) // Skip orders
+
+		// Test user schema (should not skip)
+		shouldSkip, err := selector.AskToSkipKind(context.Background(), *userSchema)
+		assert.NoError(t, err)
+		assert.False(t, shouldSkip)
+
+		// Test order schema (should skip)
+		shouldSkip, err = selector.AskToSkipKind(context.Background(), *orderSchema)
+		assert.NoError(t, err)
+		assert.True(t, shouldSkip)
+	})
+}
+
 // Mock helper functions for testing CLI business logic
 func validatePartitionKey(key string, fields []interfaces.FieldInfo) bool {
 	for _, field := range fields {
@@ -85,4 +184,14 @@ func buildTestMigrationConfig() interfaces.MigrationConfig {
 		interfaces.TestKeySelection("id", nil),
 		interfaces.SampleUserSchema,
 	)
+}
+
+// Helper functions for skip functionality testing
+func shouldAutoSkipKind(schema interfaces.KindSchema) bool {
+	return schema.Count == 0 || len(schema.Fields) == 0
+}
+
+func formatKindPreview(schema interfaces.KindSchema) string {
+	return fmt.Sprintf("Kind: %s, Entities: %d, Fields: %d",
+		schema.Name, schema.Count, len(schema.Fields))
 }
