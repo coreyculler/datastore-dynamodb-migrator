@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
+	"datastore-dynamodb-migrator/internal/cli"
 	"datastore-dynamodb-migrator/internal/interfaces"
 )
 
@@ -57,12 +58,28 @@ func (c *Client) CreateTable(ctx context.Context, config interfaces.MigrationCon
 	}
 
 	if exists {
-		if dryRun {
-			fmt.Printf("🔍 DRY RUN: Table %s already exists, would skip creation\n", config.TargetTable)
-		} else {
-			fmt.Printf("Table %s already exists, skipping creation\n", config.TargetTable)
+		// If the table exists, ask the user how to proceed.
+		selector := cli.NewInteractiveSelector() // We need a CLI selector here.
+		action, err := selector.HandleExistingTable(ctx, config.TargetTable)
+		if err != nil {
+			return fmt.Errorf("failed to handle existing table: %w", err)
 		}
-		return nil
+
+		switch action {
+		case "skip":
+			fmt.Printf("⏭️  Skipping table %s as requested.\n", config.TargetTable)
+			return nil // Returning nil to indicate graceful skip, not an error.
+		case "truncate":
+			fmt.Printf("⚠️  Truncating table %s...\n", config.TargetTable)
+			if err := c.truncateTable(ctx, config.TargetTable, config, dryRun); err != nil {
+				return fmt.Errorf("failed to truncate table: %w", err)
+			}
+			fmt.Printf("✅ Table %s truncated successfully.\n", config.TargetTable)
+			// After truncating, we proceed to create it with the new schema.
+		case "insert":
+			fmt.Printf("➡️  Inserting/updating records in existing table %s.\n", config.TargetTable)
+			return nil // Continue without creating a new table.
+		}
 	}
 
 	// Build key schema
@@ -367,6 +384,110 @@ func (c *Client) getAttributeType(fieldName string, schema interfaces.KindSchema
 
 	// If field not found in schema, default to string
 	return types.ScalarAttributeTypeS
+}
+
+// truncateTable deletes and recreates a table to clear its contents.
+func (c *Client) truncateTable(ctx context.Context, tableName string, config interfaces.MigrationConfig, dryRun bool) error {
+	if dryRun {
+		fmt.Printf("\n🔍 DRY RUN: Would truncate table %s by deleting and recreating it.", tableName)
+		return nil
+	}
+
+	// Delete the table
+	deleteInput := &dynamodb.DeleteTableInput{
+		TableName: aws.String(tableName),
+	}
+	_, err := c.client.DeleteTable(ctx, deleteInput)
+	if err != nil {
+		return fmt.Errorf("failed to delete table %s for truncation: %w", tableName, err)
+	}
+
+	// Wait for the table to not exist anymore
+	fmt.Printf("\nWaiting for table %s to be deleted...", tableName)
+	waiter := dynamodb.NewTableNotExistsWaiter(c.client)
+	err = waiter.Wait(ctx, &dynamodb.DescribeTableInput{TableName: aws.String(tableName)}, 5*time.Minute)
+	if err != nil {
+		return fmt.Errorf("failed to wait for table %s to be deleted: %w", tableName, err)
+	}
+	fmt.Println(" Done.")
+
+	// Re-create the table using the original CreateTable logic (but without the existence check)
+	return c.createTableInternal(ctx, config, dryRun)
+}
+
+// createTableInternal handles the actual table creation logic.
+func (c *Client) createTableInternal(ctx context.Context, config interfaces.MigrationConfig, dryRun bool) error {
+	// Build key schema
+	keySchema := []types.KeySchemaElement{
+		{
+			AttributeName: aws.String(config.KeySelection.PartitionKey),
+			KeyType:       types.KeyTypeHash,
+		},
+	}
+
+	// Build attribute definitions
+	attributeDefinitions := []types.AttributeDefinition{
+		{
+			AttributeName: aws.String(config.KeySelection.PartitionKey),
+			AttributeType: c.getAttributeType(config.KeySelection.PartitionKey, config.Schema),
+		},
+	}
+
+	// Add sort key if specified
+	if config.KeySelection.SortKey != nil && *config.KeySelection.SortKey != "" {
+		keySchema = append(keySchema, types.KeySchemaElement{
+			AttributeName: aws.String(*config.KeySelection.SortKey),
+			KeyType:       types.KeyTypeRange,
+		})
+
+		attributeDefinitions = append(attributeDefinitions, types.AttributeDefinition{
+			AttributeName: aws.String(*config.KeySelection.SortKey),
+			AttributeType: c.getAttributeType(*config.KeySelection.SortKey, config.Schema),
+		})
+	}
+
+	// Create table input
+	createTableInput := &dynamodb.CreateTableInput{
+		TableName:            aws.String(config.TargetTable),
+		KeySchema:            keySchema,
+		AttributeDefinitions: attributeDefinitions,
+		BillingMode:          types.BillingModePayPerRequest,
+		Tags: []types.Tag{
+			{Key: aws.String("MigrationSource"), Value: aws.String("DataStore")},
+			{Key: aws.String("SourceKind"), Value: aws.String(config.SourceKind)},
+		},
+	}
+
+	if dryRun {
+		// In dry-run mode, just show what would be created
+		fmt.Printf("🔍 DRY RUN: Would create table '%s' with:\n", config.TargetTable)
+		fmt.Printf("  - Partition Key: %s (%s)\n", config.KeySelection.PartitionKey,
+			c.getAttributeType(config.KeySelection.PartitionKey, config.Schema))
+		if config.KeySelection.SortKey != nil && *config.KeySelection.SortKey != "" {
+			fmt.Printf("  - Sort Key: %s (%s)\n", *config.KeySelection.SortKey,
+				c.getAttributeType(*config.KeySelection.SortKey, config.Schema))
+		}
+		fmt.Printf("  - Billing Mode: Pay-per-request\n")
+		fmt.Printf("  - Tags: MigrationSource=DataStore, SourceKind=%s\n", config.SourceKind)
+		return nil
+	}
+
+	// Create the table
+	_, err := c.client.CreateTable(ctx, createTableInput)
+	if err != nil {
+		return fmt.Errorf("failed to create table %s: %w", config.TargetTable, err)
+	}
+
+	// Wait for table to be active
+	fmt.Printf("\nWaiting for table %s to be active...", config.TargetTable)
+	waiter := dynamodb.NewTableExistsWaiter(c.client)
+	err = waiter.Wait(ctx, &dynamodb.DescribeTableInput{TableName: aws.String(config.TargetTable)}, 5*time.Minute)
+	if err != nil {
+		return fmt.Errorf("failed to wait for table %s to be active: %w", config.TargetTable, err)
+	}
+	fmt.Println(" Done.")
+
+	return nil
 }
 
 // Close closes the DynamoDB client (no-op for AWS SDK v2)

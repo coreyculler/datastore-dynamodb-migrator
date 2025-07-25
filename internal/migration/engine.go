@@ -147,6 +147,9 @@ func (e *Engine) Migrate(ctx context.Context, config interfaces.MigrationConfig,
 	go func() {
 		defer close(progressChan)
 
+		totalProcessed := int64(0)
+		totalErrors := int64(0)
+
 		// Helper function to send progress non-blocking
 		sendProgress := func(progress interfaces.MigrationProgress) {
 			select {
@@ -264,6 +267,7 @@ func (e *Engine) Migrate(ctx context.Context, config interfaces.MigrationConfig,
 					// Continue simulation
 				}
 			}
+			totalProcessed = config.Schema.Count // In dry-run, we assume all are processed
 		} else {
 			// Normal mode: actually process entities
 			entityChan, err := e.datastoreClient.GetEntities(ctx, config.SourceKind, batchSize)
@@ -273,26 +277,31 @@ func (e *Engine) Migrate(ctx context.Context, config interfaces.MigrationConfig,
 					progress.InProgress = false
 					progress.Completed = true
 					sendProgress(progress)
-					return
+					return // Exit without sending a final report if context is cancelled.
 				}
 				if e.debug {
 					fmt.Printf("\nDEBUG: GetEntities failed for Kind %s: %v\n", config.SourceKind, err)
 				}
-				progress.Errors++
-				progress.InProgress = false
-				progress.Completed = true
-				sendProgress(progress)
-				return
+				totalErrors++
+				// Do not return here. Let the function proceed to the final progress report.
+			} else {
+				// Process entities in batches using workers
+				processedCount, errorCount := e.processEntitiesWithWorkers(ctx, entityChan, config, progressChan, batchSize, maxWorkers, analyzer, dryRun)
+				totalProcessed = processedCount
+				totalErrors += errorCount
 			}
-
-			// Process entities in batches using workers
-			e.processEntitiesWithWorkers(ctx, entityChan, config, progressChan, batchSize, maxWorkers, analyzer, dryRun)
 		}
 
-		// Send final progress
-		progress.InProgress = false
-		progress.Completed = true
-		sendProgress(progress)
+		// Send final progress report for this Kind
+		finalProgress := interfaces.MigrationProgress{
+			Kind:       config.SourceKind,
+			Processed:  totalProcessed,
+			Total:      config.Schema.Count,
+			Errors:     totalErrors,
+			InProgress: false,
+			Completed:  true,
+		}
+		sendProgress(finalProgress)
 	}()
 
 	return progressChan, nil
@@ -307,7 +316,7 @@ func (e *Engine) processEntitiesWithWorkers(
 	batchSize int,
 	maxWorkers int,
 	analyzer interfaces.Introspector,
-	dryRun bool) {
+	dryRun bool) (int64, int64) {
 
 	// Create work channels
 	workChan := make(chan []interface{}, maxWorkers*2)
@@ -431,6 +440,8 @@ func (e *Engine) processEntitiesWithWorkers(
 		cancelWorkers()
 		<-done
 	}
+
+	return processed, errors
 }
 
 // processBatch processes a batch of entities

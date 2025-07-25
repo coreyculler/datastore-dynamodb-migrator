@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 
+	"google.golang.org/api/iterator"
+
 	"datastore-dynamodb-migrator/internal/interfaces"
 
 	"cloud.google.com/go/datastore"
@@ -168,7 +170,7 @@ func (c *Client) GetEntities(ctx context.Context, kind string, batchSize int) (<
 	}
 
 	if batchSize <= 0 {
-		batchSize = 100 // Default batch size
+		batchSize = 100 // Default batch size for channel buffer
 	}
 
 	entityChan := make(chan interface{}, batchSize)
@@ -177,85 +179,34 @@ func (c *Client) GetEntities(ctx context.Context, kind string, batchSize int) (<
 		defer close(entityChan)
 
 		query := datastore.NewQuery(kind)
-		cursor := ""
+		it := c.client.Run(ctx, query)
 
 		for {
-			// Check for context cancellation before each batch
-			select {
-			case <-ctx.Done():
-				return
-			default:
+			var entity datastore.PropertyList
+			key, err := it.Next(&entity)
+			if err == iterator.Done {
+				break // All entities have been fetched
 			}
-
-			// Apply cursor if we have one
-			if cursor != "" {
-				decodedCursor, err := datastore.DecodeCursor(cursor)
-				if err != nil {
-					fmt.Printf("Error decoding cursor: %v\n", err)
-					return
-				}
-				query = query.Start(decodedCursor)
-			}
-
-			// Limit the batch size
-			batchQuery := query.Limit(batchSize)
-
-			// Use PropertyList to handle arbitrary schemas
-			var entities []datastore.PropertyList
-			keys, err := c.client.GetAll(ctx, batchQuery, &entities)
 			if err != nil {
-				// Check if error is due to context cancellation
+				// If the context was cancelled, it's not a migration error, just an interruption.
 				if ctx.Err() != nil {
 					return
 				}
-				fmt.Printf("Error fetching entities: %v\n", err)
+				// This is a genuine error during fetching. Log it and terminate for this Kind.
+				// The migration engine will detect that not all entities were processed.
+				fmt.Printf("\nERROR: Failed to fetch entity for Kind '%s': %v\n", kind, err)
 				return
 			}
 
-			// If no entities returned, we're done
-			if len(entities) == 0 {
-				break
-			}
-
-			// Send entities through the channel
-			for i, entity := range entities {
-				select {
-				case <-ctx.Done():
-					return
-				case entityChan <- &EntityWithKey{
-					Key:        keys[i],
-					Properties: entity,
-				}:
-				}
-			}
-
-			// If we got fewer entities than requested, we're done
-			if len(entities) < batchSize {
-				break
-			}
-
-			// Check for context cancellation before getting next cursor
+			// Send the fetched entity to the channel
 			select {
 			case <-ctx.Done():
 				return
-			default:
+			case entityChan <- &EntityWithKey{
+				Key:        key,
+				Properties: entity,
+			}:
 			}
-
-			// Get cursor for next batch
-			lastKey := keys[len(keys)-1]
-			nextCursor := datastore.NewQuery(kind).Filter("__key__ >", lastKey).Limit(1)
-			nextKeys, err := c.client.GetAll(ctx, nextCursor.KeysOnly(), nil)
-			if err != nil {
-				// Check if error is due to context cancellation
-				if ctx.Err() != nil {
-					return
-				}
-				break
-			}
-			if len(nextKeys) == 0 {
-				break
-			}
-			cursor = nextKeys[0].String()
 		}
 	}()
 

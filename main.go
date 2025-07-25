@@ -321,42 +321,59 @@ func runMigration(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to start migration: %w", err)
 	}
 
-	// Track progress
-	completed := make(map[string]bool)
+	// Track progress using a for...range loop, which correctly handles channel closure.
 	var totalErrors int64
+	completedMigrations := make(map[string]interfaces.MigrationProgress)
+	activeMigrations := make(map[string]bool)
 
-	for {
+	for progress := range progressChan {
+		// The select is still useful for handling user cancellation during progress updates.
 		select {
 		case <-ctx.Done():
-			fmt.Println("\nMigration interrupted")
+			fmt.Println("\nMigration interrupted by user.")
 			return nil
-		case progress, ok := <-progressChan:
-			if !ok {
-				// Channel closed, migration completed or stopped
-				break
-			}
+		default:
+			// Continue processing progress update.
+		}
 
-			if interactive {
-				selector.ShowMigrationProgress(progress)
+		if progress.Completed {
+			completedMigrations[progress.Kind] = progress
+			delete(activeMigrations, progress.Kind)
+		} else {
+			activeMigrations[progress.Kind] = true
+		}
+
+		if interactive {
+			selector.ShowMigrationProgress(progress)
+		} else {
+			if dryRun {
+				fmt.Printf("DRY RUN - Kind %s: %d/%d analyzed, %d errors\n",
+					progress.Kind, progress.Processed, progress.Total, progress.Errors)
 			} else {
-				if dryRun {
-					fmt.Printf("DRY RUN - Kind %s: %d/%d analyzed, %d errors\n",
-						progress.Kind, progress.Processed, progress.Total, progress.Errors)
-				} else {
-					fmt.Printf("Kind %s: %d/%d processed, %d errors\n",
-						progress.Kind, progress.Processed, progress.Total, progress.Errors)
-				}
+				fmt.Printf("Kind %s: %d/%d processed, %d errors\n",
+					progress.Kind, progress.Processed, progress.Total, progress.Errors)
 			}
+		}
+	}
 
-			if progress.Completed {
-				completed[progress.Kind] = true
-				totalErrors += progress.Errors
+	// Print a final, clean summary of all completed migrations.
+	fmt.Println("\n--- Migration Results ---")
+	for _, config := range migrationConfigs {
+		if finalProgress, ok := completedMigrations[config.SourceKind]; ok {
+			if finalProgress.Errors > 0 {
+				fmt.Printf("❌ %s: COMPLETED WITH %d ERRORS (processed %d/%d)\n",
+					finalProgress.Kind, finalProgress.Errors, finalProgress.Processed, finalProgress.Total)
+			} else if finalProgress.Processed < finalProgress.Total {
+				fmt.Printf("⚠️  %s: COMPLETED INPARTIALLY (processed %d/%d)\n",
+					finalProgress.Kind, finalProgress.Processed, finalProgress.Total)
+			} else {
+				fmt.Printf("✅ %s: COMPLETED SUCCESSFULLY (%d/%d)\n",
+					finalProgress.Kind, finalProgress.Processed, finalProgress.Total)
 			}
-
-			// Check if all migrations are complete
-			if len(completed) == len(migrationConfigs) {
-				break
-			}
+			totalErrors += finalProgress.Errors
+		} else {
+			// This case handles migrations that were interrupted and never sent a 'Completed' signal.
+			fmt.Printf("❓ %s: Did not complete. Status unknown.\n", config.SourceKind)
 		}
 	}
 

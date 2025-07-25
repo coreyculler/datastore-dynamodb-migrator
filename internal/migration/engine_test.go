@@ -319,10 +319,10 @@ func (suite *EngineTestSuite) TestMigrate_GetEntitiesError() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Mock successful table creation
+	// Mock expectations for this test case
 	suite.mockDynamoDB.On("CreateTable", mock.AnythingOfType("*context.timerCtx"), config, false).Return(nil)
 
-	// Mock GetEntities failure
+	// Simulate GetEntities returning an error
 	suite.mockDataStore.On("GetEntities", mock.AnythingOfType("*context.timerCtx"), config.SourceKind, 100).Return(nil, fmt.Errorf("failed to get entities"))
 
 	progressChan, err := suite.engine.Migrate(ctx, config, false)
@@ -330,7 +330,7 @@ func (suite *EngineTestSuite) TestMigrate_GetEntitiesError() {
 	assert.NoError(suite.T(), err)
 	assert.NotNil(suite.T(), progressChan)
 
-	// Collect progress updates with timeout
+	// Collect all progress updates
 	var progressList []interfaces.MigrationProgress
 	done := make(chan bool)
 	go func() {
@@ -348,12 +348,13 @@ func (suite *EngineTestSuite) TestMigrate_GetEntitiesError() {
 	}
 
 	// Verify error handling
-	assert.Greater(suite.T(), len(progressList), 0)
+	assert.Greater(suite.T(), len(progressList), 0, "Should have received at least one progress update")
 
 	lastProgress := progressList[len(progressList)-1]
-	assert.Greater(suite.T(), lastProgress.Errors, int64(0))
-	assert.False(suite.T(), lastProgress.InProgress)
-	assert.True(suite.T(), lastProgress.Completed)
+	assert.Greater(suite.T(), lastProgress.Errors, int64(0), "Final progress should report at least one error")
+	assert.False(suite.T(), lastProgress.InProgress, "Migration should not be in progress")
+	assert.True(suite.T(), lastProgress.Completed, "Migration should be marked as completed")
+	assert.Equal(suite.T(), int64(0), lastProgress.Processed, "Should have processed 0 entities due to the error")
 }
 
 func (suite *EngineTestSuite) TestMigrate_DryRun() {
@@ -364,7 +365,7 @@ func (suite *EngineTestSuite) TestMigrate_DryRun() {
 	// Mock expectations for dry run - only CreateTable is called in dry-run mode
 	suite.mockDynamoDB.On("CreateTable", mock.AnythingOfType("*context.timerCtx"), config, true).Return(nil)
 
-	// In the new dry-run implementation, GetEntities, ConvertForDynamoDB, and PutItems 
+	// In the new dry-run implementation, GetEntities, ConvertForDynamoDB, and PutItems
 	// are NOT called - the process is simulated for faster response
 
 	progressChan, err := suite.engine.Migrate(ctx, config, true)
@@ -391,7 +392,7 @@ func (suite *EngineTestSuite) TestMigrate_DryRun() {
 
 	// Verify we got progress updates from the simulation
 	assert.Greater(suite.T(), len(progressList), 0)
-	
+
 	// Verify the final progress shows completion
 	finalProgress := progressList[len(progressList)-1]
 	assert.Equal(suite.T(), config.SourceKind, finalProgress.Kind)

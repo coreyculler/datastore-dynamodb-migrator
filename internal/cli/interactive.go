@@ -430,18 +430,51 @@ func (s *InteractiveSelector) ConfirmMigration(ctx context.Context, configs []in
 func (s *InteractiveSelector) ShowMigrationProgress(progress interfaces.MigrationProgress) {
 	percentage := float64(progress.Processed) / float64(progress.Total) * 100
 
+	// Using '\r' moves the cursor to the beginning of the line, so each update overwrites the last.
+	// We no longer print a newline here, as the final summary will be handled separately.
 	fmt.Printf("\r%s: %d/%d (%.1f%%) | Errors: %d",
 		progress.Kind,
 		progress.Processed,
 		progress.Total,
 		percentage,
 		progress.Errors)
+}
 
-	if progress.Completed {
-		if progress.Errors > 0 {
-			fmt.Printf(" - COMPLETED WITH ERRORS\n")
-		} else {
-			fmt.Printf(" - COMPLETED SUCCESSFULLY\n")
+// HandleExistingTable prompts the user for an action when a DynamoDB table already exists.
+// It returns a string representing the chosen action: "truncate", "insert", or "skip".
+func (s *InteractiveSelector) HandleExistingTable(ctx context.Context, tableName string) (string, error) {
+	fmt.Printf("\n⚠️  DynamoDB table '%s' already exists.\n", tableName)
+	prompt := promptui.Select{
+		Label: "How would you like to proceed?",
+		Items: []string{
+			"Truncate the table (delete all existing items and re-migrate)",
+			"Insert/Update records (migrate new records, overwrite existing ones with the same key)",
+			"Skip this table (do not migrate)",
+		},
+		Templates: &promptui.SelectTemplates{
+			Label:    "{{ . }}:",
+			Active:   "▶ {{ . }}",
+			Inactive: "  {{ . }}",
+			Selected: "✓ {{ . | green }}",
+		},
+	}
+
+	idx, _, err := s.runPromptWithContext(ctx, &prompt)
+	if err != nil {
+		if err == promptui.ErrInterrupt {
+			return "skip", nil // Default to skipping if the user cancels.
 		}
+		return "", fmt.Errorf("failed to get user choice for existing table: %w", err)
+	}
+
+	switch idx {
+	case 0:
+		return "truncate", nil
+	case 1:
+		return "insert", nil
+	case 2:
+		return "skip", nil
+	default:
+		return "skip", nil // Should not happen, but default to safe option.
 	}
 }
