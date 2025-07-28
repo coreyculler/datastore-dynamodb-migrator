@@ -37,7 +37,7 @@ func TestMigrationConfig(sourceKind, targetTable string, keySelection KeySelecti
 		SourceKind:   sourceKind,
 		TargetTable:  targetTable,
 		KeySelection: keySelection,
-		Schema:       *schema,
+		Schema:       schema,
 	}
 }
 
@@ -224,5 +224,5 @@ func AssertMigrationConfigEqual(expected, actual MigrationConfig) bool {
 		return false
 	}
 
-	return AssertKindSchemaEqual(&expected.Schema, &actual.Schema)
+	return AssertKindSchemaEqual(expected.Schema, actual.Schema)
 }

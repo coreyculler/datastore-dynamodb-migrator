@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"datastore-dynamodb-migrator/internal/interfaces"
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/interfaces"
 
 	"github.com/manifoldco/promptui"
 )

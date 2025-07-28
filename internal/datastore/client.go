@@ -8,9 +8,8 @@ import (
 
 	"google.golang.org/api/iterator"
 
-	"datastore-dynamodb-migrator/internal/interfaces"
-
 	"cloud.google.com/go/datastore"
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/interfaces"
 )
 
 // Client wraps the GCP DataStore client and implements the DataStoreClient interface
@@ -73,14 +72,12 @@ func (c *Client) AnalyzeKind(ctx context.Context, kind string) (*interfaces.Kind
 		return nil, fmt.Errorf("kind name is required")
 	}
 
-	// First, get the count of entities
-	countQuery := datastore.NewQuery(kind).KeysOnly()
-	keys, err := c.client.GetAll(ctx, countQuery, nil)
+	// Get the entity count from DataStore statistics for efficiency
+	count, err := c.getEntityCount(ctx, kind)
 	if err != nil {
-		return nil, fmt.Errorf("failed to count entities for kind %s: %w", kind, err)
+		return nil, fmt.Errorf("failed to get entity count for kind %s: %w", kind, err)
 	}
 
-	count := int64(len(keys))
 	if count == 0 {
 		return &interfaces.KindSchema{
 			Name:   kind,
@@ -99,7 +96,7 @@ func (c *Client) AnalyzeKind(ctx context.Context, kind string) (*interfaces.Kind
 
 	// Use PropertyList to handle arbitrary schemas
 	var entities []datastore.PropertyList
-	_, err = c.client.GetAll(ctx, query, &entities)
+	keys, err := c.client.GetAll(ctx, query, &entities)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sample entities for kind %s: %w", kind, err)
 	}
@@ -199,6 +196,88 @@ func (c *Client) GetEntities(ctx context.Context, kind string, batchSize int) (<
 			}
 
 			// Send the fetched entity to the channel
+			select {
+			case <-ctx.Done():
+				return
+			case entityChan <- &EntityWithKey{
+				Key:        key,
+				Properties: entity,
+			}:
+			}
+		}
+	}()
+
+	return entityChan, nil
+}
+
+// getEntityCount retrieves the number of entities for a kind from DataStore statistics.
+func (c *Client) getEntityCount(ctx context.Context, kind string) (int64, error) {
+	key := datastore.NameKey("__Stat_Kind__", kind, nil)
+
+	var properties datastore.PropertyList
+	err := c.client.Get(ctx, key, &properties)
+	if err != nil {
+		if err == datastore.ErrNoSuchEntity {
+			// If stats are not available, fall back to counting keys (slower)
+			fmt.Printf("⚠️  Statistics not available for Kind '%s', falling back to key count (this may be slow).\n", kind)
+			return c.countKeys(ctx, kind)
+		}
+		return 0, err
+	}
+
+	for _, p := range properties {
+		if p.Name == "count" {
+			if count, ok := p.Value.(int64); ok {
+				return count, nil
+			}
+			return 0, fmt.Errorf("unexpected type for 'count' statistic: %T", p.Value)
+		}
+	}
+
+	return 0, fmt.Errorf("'count' statistic not found for Kind '%s'", kind)
+}
+
+// countKeys is a fallback method to count entities by fetching all keys.
+func (c *Client) countKeys(ctx context.Context, kind string) (int64, error) {
+	query := datastore.NewQuery(kind).KeysOnly()
+	keys, err := c.client.GetAll(ctx, query, nil)
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(keys)), nil
+}
+
+// GetEntitiesSample returns a channel of sample entities for the specified Kind
+func (c *Client) GetEntitiesSample(ctx context.Context, kind string, limit int) (<-chan interface{}, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if kind == "" {
+		return nil, fmt.Errorf("kind name is required")
+	}
+
+	entityChan := make(chan interface{}, limit)
+
+	go func() {
+		defer close(entityChan)
+
+		query := datastore.NewQuery(kind).Limit(limit)
+		it := c.client.Run(ctx, query)
+
+		for {
+			var entity datastore.PropertyList
+			key, err := it.Next(&entity)
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				fmt.Printf("\nERROR: Failed to fetch entity for Kind '%s': %v\n", kind, err)
+				return
+			}
+
 			select {
 			case <-ctx.Done():
 				return

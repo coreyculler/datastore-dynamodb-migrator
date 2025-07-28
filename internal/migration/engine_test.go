@@ -6,11 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/interfaces"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
-
-	"datastore-dynamodb-migrator/internal/interfaces"
 )
 
 type EngineTestSuite struct {
@@ -323,7 +322,7 @@ func (suite *EngineTestSuite) TestMigrate_GetEntitiesError() {
 	suite.mockDynamoDB.On("CreateTable", mock.AnythingOfType("*context.timerCtx"), config, false).Return(nil)
 
 	// Simulate GetEntities returning an error
-	suite.mockDataStore.On("GetEntities", mock.AnythingOfType("*context.timerCtx"), config.SourceKind, 100).Return(nil, fmt.Errorf("failed to get entities"))
+	suite.mockDataStore.On("GetEntities", mock.AnythingOfType("*context.timerCtx"), config.SourceKind, 100).Return((<-chan interface{})(nil), fmt.Errorf("failed to get entities"))
 
 	progressChan, err := suite.engine.Migrate(ctx, config, false)
 
@@ -556,4 +555,28 @@ func TestEngineProcessBatch_EmptyBatch(t *testing.T) {
 	// Test processing empty batch
 	err := engine.processBatch(ctx, []interface{}{}, config, mockIntrospector, false)
 	assert.NoError(t, err)
+}
+
+func (suite *EngineTestSuite) TestMigrate_ContextCancellation() {
+	config := interfaces.SampleUserMigrationConfig
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Mock expectations
+	suite.mockDynamoDB.On("CreateTable", mock.Anything, config, false).Return(nil)
+
+	entityChan := make(chan interface{}) // Unbuffered channel to control flow
+	suite.mockDataStore.On("GetEntities", mock.Anything, config.SourceKind, 100).Return((<-chan interface{})(entityChan), nil)
+
+	// Cancel the context after a short delay
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	progressChan, err := suite.engine.Migrate(ctx, config, false)
+	assert.NoError(suite.T(), err)
+
+	// Drain the progress channel
+	for range progressChan {
+	}
 }

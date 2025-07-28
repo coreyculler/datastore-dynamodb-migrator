@@ -5,10 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/interfaces"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
-
-	"datastore-dynamodb-migrator/internal/interfaces"
 )
 
 type AnalyzerTestSuite struct {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"datastore-dynamodb-migrator/internal/interfaces"
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/interfaces"
 )
 
 // EntityAnalyzer implements the Introspector interface

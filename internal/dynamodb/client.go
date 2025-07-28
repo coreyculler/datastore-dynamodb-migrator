@@ -12,8 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
-	"datastore-dynamodb-migrator/internal/cli"
-	"datastore-dynamodb-migrator/internal/interfaces"
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/cli"
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/interfaces"
 )
 
 // Client wraps the AWS DynamoDB client and implements the DynamoDBClient interface
@@ -279,9 +279,16 @@ func (c *Client) retryUnprocessedItems(ctx context.Context, unprocessedItems map
 		return fmt.Errorf("exceeded maximum retries (%d) for unprocessed items", maxRetries)
 	}
 
-	// Exponential backoff
+	// Exponential backoff with context cancellation
 	backoffDuration := time.Duration(1<<attempt) * time.Second
-	time.Sleep(backoffDuration)
+	timer := time.NewTimer(backoffDuration)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+	}
 
 	input := &dynamodb.BatchWriteItemInput{
 		RequestItems: unprocessedItems,
@@ -364,7 +371,10 @@ func (c *Client) convertToDynamoDBAttributeValue(value interface{}) (types.Attri
 }
 
 // getAttributeType determines the DynamoDB attribute type for a field
-func (c *Client) getAttributeType(fieldName string, schema interfaces.KindSchema) types.ScalarAttributeType {
+func (c *Client) getAttributeType(fieldName string, schema *interfaces.KindSchema) types.ScalarAttributeType {
+	if schema == nil {
+		return types.ScalarAttributeTypeS // Default to string if schema is nil
+	}
 	// Find the field in the schema
 	for _, field := range schema.Fields {
 		if field.Name == fieldName {

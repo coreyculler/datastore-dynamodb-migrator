@@ -30,7 +30,7 @@ type MigrationConfig struct {
 	SourceKind   string       `json:"source_kind"`
 	TargetTable  string       `json:"target_table"`
 	KeySelection KeySelection `json:"key_selection"`
-	Schema       KindSchema   `json:"schema"`
+	Schema       *KindSchema  `json:"schema"`
 }
 
 // MigrationProgress tracks the progress of a migration

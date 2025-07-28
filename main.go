@@ -10,15 +10,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coreyculler/datastore-dynamodb-migrator/config"
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/cli"
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/datastore"
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/dynamodb"
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/interfaces"
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/introspection"
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/migration"
 	"github.com/spf13/cobra"
-
-	"datastore-dynamodb-migrator/config"
-	"datastore-dynamodb-migrator/internal/cli"
-	"datastore-dynamodb-migrator/internal/datastore"
-	"datastore-dynamodb-migrator/internal/dynamodb"
-	"datastore-dynamodb-migrator/internal/interfaces"
-	"datastore-dynamodb-migrator/internal/introspection"
-	"datastore-dynamodb-migrator/internal/migration"
 )
 
 // Version information
@@ -253,7 +252,7 @@ func runMigration(cmd *cobra.Command, args []string) error {
 				SourceKind:   kind,
 				TargetTable:  tableName,
 				KeySelection: keySelection,
-				Schema:       *schema,
+				Schema:       schema,
 			}
 
 			migrationConfigs = append(migrationConfigs, config)
@@ -270,7 +269,7 @@ func runMigration(cmd *cobra.Command, args []string) error {
 				KeySelection: interfaces.KeySelection{
 					PartitionKey: schema.Fields[0].Name,
 				},
-				Schema: *schema,
+				Schema: schema,
 			}
 
 			migrationConfigs = append(migrationConfigs, config)

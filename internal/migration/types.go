@@ -1,8 +1,9 @@
 package migration
 
 import (
-	"datastore-dynamodb-migrator/internal/interfaces"
 	"reflect"
+
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/interfaces"
 )
 
 // Re-export the interfaces and types for backward compatibility

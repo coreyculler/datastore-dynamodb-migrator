@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"datastore-dynamodb-migrator/internal/datastore"
-	"datastore-dynamodb-migrator/internal/interfaces"
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/datastore"
+	"github.com/coreyculler/datastore-dynamodb-migrator/internal/interfaces"
 )
 
 // Engine implements the MigrationEngine interface and orchestrates migrations
@@ -87,6 +87,10 @@ func (e *Engine) ValidateConfig(config interfaces.MigrationConfig) error {
 	// Validate partition key
 	if config.KeySelection.PartitionKey == "" {
 		return fmt.Errorf("partition key cannot be empty")
+	}
+
+	if config.Schema == nil {
+		return fmt.Errorf("schema cannot be nil")
 	}
 
 	// Validate that partition key exists in schema
@@ -612,7 +616,9 @@ func (e *Engine) GetMigrationStats(configs []interfaces.MigrationConfig) Migrati
 
 	for _, config := range configs {
 		totalKinds++
-		totalEntities += config.Schema.Count
+		if config.Schema != nil {
+			totalEntities += config.Schema.Count
+		}
 	}
 
 	return MigrationStats{
