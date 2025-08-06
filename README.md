@@ -30,14 +30,14 @@ A command-line tool to migrate Google Cloud Platform (GCP) DataStore entities to
 
 ### Option 1: Build from Source
 ```bash
-git clone <repository-url>
+git clone https://github.com/coreyculler/datastore-dynamodb-migrator.git
 cd datastore-dynamodb-migrator
 make build
 ```
 
 ### Option 2: Using Go Install
 ```bash
-go install github.com/your-org/datastore-dynamodb-migrator@latest
+go install https://github.com/coreyculler/datastore-dynamodb-migrator.git@latest
 ```
 
 ### Available Make Targets

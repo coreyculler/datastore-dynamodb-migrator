@@ -1,6 +1,7 @@
 package introspection
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -234,7 +235,27 @@ func (a *EntityAnalyzer) ConvertForDynamoDB(entity interface{}, config interface
 	}
 
 	if val.Kind() != reflect.Struct {
-		// For non-struct types, use the partition key as the field name
+		// Handle map[string]interface{} directly
+		if entityMap, ok := entity.(map[string]interface{}); ok {
+			// Process all fields from the entity map
+			for fieldName, value := range entityMap {
+				// Skip internal datastore fields (they start with __)
+				if strings.HasPrefix(fieldName, "__") {
+					continue
+				}
+
+				// Convert the value to DynamoDB-compatible format
+				convertedValue, err := a.convertValueForDynamoDB(value)
+				if err != nil {
+					return nil, fmt.Errorf("failed to convert field %s: %w", fieldName, err)
+				}
+
+				result[fieldName] = convertedValue
+			}
+			return result, nil
+		}
+
+		// For other non-struct types, use the partition key as the field name
 		result[config.KeySelection.PartitionKey] = entity
 		return result, nil
 	}
@@ -349,7 +370,16 @@ func (a *EntityAnalyzer) convertValueForDynamoDB(value interface{}) (interface{}
 	}
 
 	switch val.Kind() {
-	case reflect.String, reflect.Bool:
+	case reflect.String:
+		// Check if the string is already valid JSON
+		if str, ok := value.(string); ok {
+			if a.isValidJSON(str) {
+				// If it's valid JSON, preserve it as-is
+				return str, nil
+			}
+		}
+		return value, nil
+	case reflect.Bool:
 		return value, nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return val.Int(), nil
@@ -388,7 +418,11 @@ func (a *EntityAnalyzer) convertValueForDynamoDB(value interface{}) (interface{}
 		// For other structs, convert to map
 		return a.structToMap(value)
 	default:
-		// For other types, convert to string
+		// For other types, try JSON marshaling first, then fallback to string
+		if jsonData, err := json.Marshal(value); err == nil {
+			return string(jsonData), nil
+		}
+		// Fallback to string conversion
 		return fmt.Sprintf("%v", value), nil
 	}
 }
@@ -429,4 +463,10 @@ func (a *EntityAnalyzer) structToMap(entity interface{}) (map[string]interface{}
 	}
 
 	return result, nil
+}
+
+// isValidJSON checks if a string is valid JSON
+func (a *EntityAnalyzer) isValidJSON(str string) bool {
+	var js interface{}
+	return json.Unmarshal([]byte(str), &js) == nil
 }

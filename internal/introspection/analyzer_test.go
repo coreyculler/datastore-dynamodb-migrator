@@ -442,3 +442,64 @@ func TestAnalyzeField_EdgeCases(t *testing.T) {
 	assert.Equal(t, "", fieldInfo.Name)
 	assert.Contains(t, fieldInfo.TypeName, "interface")
 }
+
+func (suite *AnalyzerTestSuite) TestConvertForDynamoDB_JSONFields() {
+	config := interfaces.MigrationConfig{
+		KeySelection: interfaces.KeySelection{
+			PartitionKey: "id",
+		},
+	}
+
+	// Test valid JSON string preservation
+	jsonString := `{"name": "John", "age": 30, "active": true}`
+	entity := map[string]interface{}{
+		"id":       "123",
+		"jsonData": jsonString,
+	}
+
+	result, err := suite.analyzer.ConvertForDynamoDB(entity, config)
+	assert.NoError(suite.T(), err)
+	assert.NotNil(suite.T(), result)
+	assert.Equal(suite.T(), "123", result["id"])
+	assert.Equal(suite.T(), jsonString, result["jsonData"], "Valid JSON string should be preserved as-is")
+
+	// Test complex object conversion to JSON
+	complexObject := map[string]interface{}{
+		"nested": map[string]interface{}{
+			"field1": "value1",
+			"field2": 42,
+		},
+		"array": []interface{}{"item1", "item2", 123},
+	}
+
+	entity2 := map[string]interface{}{
+		"id":      "456",
+		"complex": complexObject,
+	}
+
+	result2, err := suite.analyzer.ConvertForDynamoDB(entity2, config)
+	assert.NoError(suite.T(), err)
+	assert.NotNil(suite.T(), result2)
+	assert.Equal(suite.T(), "456", result2["id"])
+
+	// The complex object should be converted to a proper map structure
+	convertedComplex, ok := result2["complex"].(map[string]interface{})
+	assert.True(suite.T(), ok, "Complex object should be converted to map[string]interface{}")
+	assert.Equal(suite.T(), "value1", convertedComplex["nested"].(map[string]interface{})["field1"])
+}
+
+func (suite *AnalyzerTestSuite) TestIsValidJSON() {
+	// Test valid JSON strings
+	assert.True(suite.T(), suite.analyzer.isValidJSON(`{"key": "value"}`))
+	assert.True(suite.T(), suite.analyzer.isValidJSON(`[1, 2, 3]`))
+	assert.True(suite.T(), suite.analyzer.isValidJSON(`"simple string"`))
+	assert.True(suite.T(), suite.analyzer.isValidJSON(`123`))
+	assert.True(suite.T(), suite.analyzer.isValidJSON(`true`))
+	assert.True(suite.T(), suite.analyzer.isValidJSON(`null`))
+
+	// Test invalid JSON strings
+	assert.False(suite.T(), suite.analyzer.isValidJSON(`{invalid json}`))
+	assert.False(suite.T(), suite.analyzer.isValidJSON(`plain text`))
+	assert.False(suite.T(), suite.analyzer.isValidJSON(`{"missing": quote}`))
+	assert.False(suite.T(), suite.analyzer.isValidJSON(``)) // empty string
+}

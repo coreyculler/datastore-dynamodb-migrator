@@ -2,6 +2,7 @@ package dynamodb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -365,7 +366,11 @@ func (c *Client) convertToDynamoDBAttributeValue(value interface{}) (types.Attri
 		}
 		return &types.AttributeValueMemberM{Value: m}, nil
 	default:
-		// For unknown types, convert to string
+		// For unknown types, try JSON marshaling first, then fallback to string
+		if jsonData, err := json.Marshal(v); err == nil {
+			return &types.AttributeValueMemberS{Value: string(jsonData)}, nil
+		}
+		// Fallback to string conversion
 		return &types.AttributeValueMemberS{Value: fmt.Sprintf("%v", v)}, nil
 	}
 }
