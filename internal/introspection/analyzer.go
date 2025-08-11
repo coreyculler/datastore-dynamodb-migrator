@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/datastore"
 	"github.com/coreyculler/datastore-dynamodb-migrator/internal/interfaces"
 )
 
@@ -274,6 +275,11 @@ func (a *EntityAnalyzer) ConvertForDynamoDB(entity interface{}, config interface
 			continue
 		}
 
+		// Skip DataStore wrapper fields that shouldn't be migrated
+		if a.isDataStoreWrapperField(fieldType.Name, fieldName) {
+			continue
+		}
+
 		value := field.Interface()
 
 		// Convert the value to DynamoDB-compatible format
@@ -286,6 +292,22 @@ func (a *EntityAnalyzer) ConvertForDynamoDB(entity interface{}, config interface
 	}
 
 	return result, nil
+}
+
+// isDataStoreWrapperField checks if a field is a DataStore wrapper field that should be skipped
+func (a *EntityAnalyzer) isDataStoreWrapperField(structFieldName, jsonFieldName string) bool {
+	// Skip common DataStore wrapper fields that shouldn't be migrated to DynamoDB
+	wrapperFields := map[string]bool{
+		"Key":        true, // DataStore key wrapper
+		"Properties": true, // DataStore properties wrapper
+		"Values":     true, // Common DataStore field name
+		"key":        true, // lowercase variants
+		"properties": true,
+		"values":     true,
+	}
+
+	// Check both the struct field name and the JSON tag name
+	return wrapperFields[structFieldName] || wrapperFields[jsonFieldName]
 }
 
 // getFieldName returns the field name to use, checking for datastore tags
@@ -359,23 +381,44 @@ func (a *EntityAnalyzer) convertValueForDynamoDB(value interface{}) (interface{}
 		return nil, nil
 	}
 
+	// Handle pointers first
 	val := reflect.ValueOf(value)
-
-	// Handle pointers
 	if val.Kind() == reflect.Ptr {
 		if val.IsNil() {
 			return nil, nil
 		}
+		// Try to convert the pointed-to value
 		return a.convertValueForDynamoDB(val.Elem().Interface())
+	}
+
+	// Handle DataStore nested entities before falling back to reflection
+	if dsEntity, ok := value.(*datastore.Entity); ok {
+		return a.convertPropertyListToMap(dsEntity.Properties)
+	}
+	// Also handle non-pointer datastore.Entity values
+	if dsEntityVal, ok := value.(datastore.Entity); ok {
+		return a.convertPropertyListToMap(dsEntityVal.Properties)
+	}
+	if propList, ok := value.(datastore.PropertyList); ok {
+		return a.convertPropertyListToMap(propList)
 	}
 
 	switch val.Kind() {
 	case reflect.String:
-		// Check if the string is already valid JSON
+		// Check if the string is a serialized Datastore PropertyList/Entity and repair it
 		if str, ok := value.(string); ok {
+			trim := strings.TrimSpace(str)
+			if strings.Contains(trim, "\"Properties\":") || strings.HasPrefix(trim, "{\"Key\":") {
+				if repaired, ok := a.tryRepairDatastorePropertyListString(trim); ok {
+					return repaired, nil
+				}
+			}
+			// Otherwise, if the string is valid JSON, unmarshal as JSON value
 			if a.isValidJSON(str) {
-				// If it's valid JSON, preserve it as-is
-				return str, nil
+				var jsonData interface{}
+				if json.Unmarshal([]byte(str), &jsonData) == nil {
+					return jsonData, nil
+				}
 			}
 		}
 		return value, nil
@@ -388,7 +431,7 @@ func (a *EntityAnalyzer) convertValueForDynamoDB(value interface{}) (interface{}
 	case reflect.Float32, reflect.Float64:
 		return val.Float(), nil
 	case reflect.Slice:
-		// Convert slice elements
+		// Recursively convert slice elements
 		slice := make([]interface{}, val.Len())
 		for i := 0; i < val.Len(); i++ {
 			converted, err := a.convertValueForDynamoDB(val.Index(i).Interface())
@@ -399,7 +442,7 @@ func (a *EntityAnalyzer) convertValueForDynamoDB(value interface{}) (interface{}
 		}
 		return slice, nil
 	case reflect.Map:
-		// Convert map to string keys
+		// Recursively convert map values
 		result := make(map[string]interface{})
 		for _, key := range val.MapKeys() {
 			keyStr := fmt.Sprintf("%v", key.Interface())
@@ -411,28 +454,78 @@ func (a *EntityAnalyzer) convertValueForDynamoDB(value interface{}) (interface{}
 		}
 		return result, nil
 	case reflect.Struct:
-		// Handle time.Time specially
+		// Special handling for time.Time
 		if t, ok := value.(time.Time); ok {
 			return t.Unix(), nil
 		}
-		// For other structs, convert to map
+		// For other structs, convert to a map
 		return a.structToMap(value)
 	default:
-		// For other types, try JSON marshaling first, then fallback to string
-		if jsonData, err := json.Marshal(value); err == nil {
-			return string(jsonData), nil
-		}
-		// Fallback to string conversion
-		return fmt.Sprintf("%v", value), nil
+		return value, nil
 	}
+}
+
+// tryRepairDatastorePropertyListString attempts to parse a serialized Datastore Entity/PropertyList JSON
+// like {"Key":null,"Properties":[{"Name":"field","Value":...,"NoIndex":true}, ...]}
+// and rebuild a clean map[string]interface{} from the Properties array.
+func (a *EntityAnalyzer) tryRepairDatastorePropertyListString(s string) (map[string]interface{}, bool) {
+	type dsProp struct {
+		Name    string      `json:"Name"`
+		Value   interface{} `json:"Value"`
+		NoIndex bool        `json:"NoIndex"`
+	}
+	type dsWrapper struct {
+		Key        interface{} `json:"Key"`
+		Properties []dsProp    `json:"Properties"`
+	}
+
+	var w dsWrapper
+	if err := json.Unmarshal([]byte(s), &w); err != nil {
+		return nil, false
+	}
+	if len(w.Properties) == 0 {
+		return nil, false
+	}
+
+	rebuilt := make(map[string]interface{})
+	for _, p := range w.Properties {
+		converted, err := a.convertValueForDynamoDB(p.Value)
+		if err != nil {
+			return nil, false
+		}
+		rebuilt[p.Name] = converted
+	}
+	return rebuilt, true
+}
+
+// convertPropertyListToMap converts a DataStore PropertyList to a map[string]interface{}
+func (a *EntityAnalyzer) convertPropertyListToMap(propList datastore.PropertyList) (map[string]interface{}, error) {
+	result := make(map[string]interface{})
+
+	for _, prop := range propList {
+		// Recursively convert the property value
+		convertedValue, err := a.convertValueForDynamoDB(prop.Value)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert property %s: %w", prop.Name, err)
+		}
+		result[prop.Name] = convertedValue
+	}
+
+	return result, nil
 }
 
 // structToMap converts a struct to a map[string]interface{}
 func (a *EntityAnalyzer) structToMap(entity interface{}) (map[string]interface{}, error) {
-	result := make(map[string]interface{})
+	if dsEntity, ok := entity.(*datastore.Entity); ok {
+		return a.convertPropertyListToMap(dsEntity.Properties)
+	}
 
+	result := make(map[string]interface{})
 	val := reflect.ValueOf(entity)
 	if val.Kind() == reflect.Ptr {
+		if val.IsNil() {
+			return nil, nil
+		}
 		val = val.Elem()
 	}
 
@@ -450,16 +543,15 @@ func (a *EntityAnalyzer) structToMap(entity interface{}) (map[string]interface{}
 		}
 
 		fieldName := a.getFieldName(fieldType)
-		if fieldName == "-" {
+		if fieldName == "-" || a.isDataStoreWrapperField(fieldType.Name, fieldName) {
 			continue
 		}
 
-		converted, err := a.convertValueForDynamoDB(field.Interface())
+		value, err := a.convertValueForDynamoDB(field.Interface())
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to convert field %s: %w", fieldName, err)
 		}
-
-		result[fieldName] = converted
+		result[fieldName] = value
 	}
 
 	return result, nil

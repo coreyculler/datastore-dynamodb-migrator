@@ -3,10 +3,10 @@ package migration
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
-	"github.com/coreyculler/datastore-dynamodb-migrator/internal/datastore"
 	"github.com/coreyculler/datastore-dynamodb-migrator/internal/interfaces"
 )
 
@@ -461,17 +461,14 @@ func (e *Engine) processBatch(ctx context.Context, entities []interface{}, confi
 		var item map[string]interface{}
 		var err error
 
-		// Handle different entity types
-		switch ent := entity.(type) {
-		case *datastore.EntityWithKey:
-			item = ent.ToMap()
-		default:
-			// Use the analyzer to convert the entity
-			item, err = analyzer.ConvertForDynamoDB(entity, config)
-			if err != nil {
-				return fmt.Errorf("failed to convert entity: %w", err)
-			}
+		// Always use the analyzer to convert the entity to ensure consistent normalization
+		item, err = analyzer.ConvertForDynamoDB(entity, config)
+		if err != nil {
+			return fmt.Errorf("failed to convert entity: %w", err)
 		}
+
+		// Ensure required keys are present on the item map (inject if missing)
+		ensurePartitionKey(item, config)
 
 		// Ensure required keys are present
 		if err := e.validateRequiredKeys(item, config); err != nil {
@@ -487,6 +484,71 @@ func (e *Engine) processBatch(ctx context.Context, entities []interface{}, confi
 	}
 
 	return nil
+}
+
+// ensurePartitionKey ensures the configured partition key exists on the item as a string.
+func ensurePartitionKey(item map[string]interface{}, config interfaces.MigrationConfig) {
+	pkName := config.KeySelection.PartitionKey
+	if pkName == "" {
+		return
+	}
+	if _, exists := item[pkName]; exists {
+		// normalize to string if possible
+		item[pkName] = stringifyValue(item[pkName])
+		return
+	}
+	// Try common sources
+	candidates := []string{"PK", "__key_name__", "__key_id__", "__key__", "id"}
+	for _, c := range candidates {
+		if v, ok := item[c]; ok {
+			item[pkName] = stringifyValue(v)
+			return
+		}
+	}
+}
+
+func stringifyValue(v interface{}) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case int:
+		return fmt.Sprintf("%d", t)
+	case int8:
+		return fmt.Sprintf("%d", t)
+	case int16:
+		return fmt.Sprintf("%d", t)
+	case int32:
+		return fmt.Sprintf("%d", t)
+	case int64:
+		return fmt.Sprintf("%d", t)
+	case uint:
+		return fmt.Sprintf("%d", t)
+	case uint8:
+		return fmt.Sprintf("%d", t)
+	case uint16:
+		return fmt.Sprintf("%d", t)
+	case uint32:
+		return fmt.Sprintf("%d", t)
+	case uint64:
+		return fmt.Sprintf("%d", t)
+	case float32:
+		f := float64(t)
+		if math.Trunc(f) == f {
+			return fmt.Sprintf("%d", int64(f))
+		}
+		return fmt.Sprintf("%g", f)
+	case float64:
+		if math.Trunc(t) == t {
+			return fmt.Sprintf("%d", int64(t))
+		}
+		return fmt.Sprintf("%g", t)
+	case fmt.Stringer:
+		return t.String()
+	default:
+		return fmt.Sprintf("%v", t)
+	}
 }
 
 // validateRequiredKeys ensures that required keys are present in the item

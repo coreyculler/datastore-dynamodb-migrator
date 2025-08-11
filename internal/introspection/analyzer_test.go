@@ -450,20 +450,27 @@ func (suite *AnalyzerTestSuite) TestConvertForDynamoDB_JSONFields() {
 		},
 	}
 
-	// Test valid JSON string preservation
+	// Test valid JSON string preservation and unmarshaling
 	jsonString := `{"name": "John", "age": 30, "active": true}`
 	entity := map[string]interface{}{
-		"id":       "123",
+		"id":       float64(123),
 		"jsonData": jsonString,
 	}
 
 	result, err := suite.analyzer.ConvertForDynamoDB(entity, config)
 	assert.NoError(suite.T(), err)
 	assert.NotNil(suite.T(), result)
-	assert.Equal(suite.T(), "123", result["id"])
-	assert.Equal(suite.T(), jsonString, result["jsonData"], "Valid JSON string should be preserved as-is")
+	assert.Equal(suite.T(), float64(123), result["id"])
 
-	// Test complex object conversion to JSON
+	// The JSON string should be unmarshaled into a map
+	expectedJSON := map[string]interface{}{
+		"name":   "John",
+		"age":    float64(30), // JSON numbers are float64
+		"active": true,
+	}
+	assert.Equal(suite.T(), expectedJSON, result["jsonData"], "Valid JSON string should be unmarshaled")
+
+	// Test complex object that should be converted to a map
 	complexObject := map[string]interface{}{
 		"nested": map[string]interface{}{
 			"field1": "value1",
@@ -473,14 +480,14 @@ func (suite *AnalyzerTestSuite) TestConvertForDynamoDB_JSONFields() {
 	}
 
 	entity2 := map[string]interface{}{
-		"id":      "456",
+		"id":      float64(456),
 		"complex": complexObject,
 	}
 
 	result2, err := suite.analyzer.ConvertForDynamoDB(entity2, config)
 	assert.NoError(suite.T(), err)
 	assert.NotNil(suite.T(), result2)
-	assert.Equal(suite.T(), "456", result2["id"])
+	assert.Equal(suite.T(), float64(456), result2["id"])
 
 	// The complex object should be converted to a proper map structure
 	convertedComplex, ok := result2["complex"].(map[string]interface{})
