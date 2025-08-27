@@ -18,6 +18,36 @@ func NewInteractiveSelector() *InteractiveSelector {
 	return &InteractiveSelector{}
 }
 
+// shouldHideFieldFromDisplay determines whether a field should be hidden from
+// CLI previews and selection prompts. We hide explicit "id" and "name"
+// fields to avoid confusion with the synthetic DataStore Primary Key (PK),
+// but always show the synthetic primary key field.
+func (s *InteractiveSelector) shouldHideFieldFromDisplay(field interfaces.FieldInfo) bool {
+	// Always show the synthetic primary key field
+	if field.Name == "PK" || field.Name == "__primary_key__" {
+		return false
+	}
+
+	nameLower := strings.ToLower(field.Name)
+	if nameLower == "id" || nameLower == "name" {
+		return true
+	}
+	return false
+}
+
+// getDisplayFields returns fields filtered for display purposes only,
+// removing duplicate/confusing identifiers like explicit id/name.
+func (s *InteractiveSelector) getDisplayFields(schema interfaces.KindSchema) []interfaces.FieldInfo {
+	filtered := make([]interfaces.FieldInfo, 0, len(schema.Fields))
+	for _, f := range schema.Fields {
+		if s.shouldHideFieldFromDisplay(f) {
+			continue
+		}
+		filtered = append(filtered, f)
+	}
+	return filtered
+}
+
 // runPromptWithContext runs a promptui prompt with context cancellation support
 func (s *InteractiveSelector) runPromptWithContext(ctx context.Context, prompt *promptui.Select) (int, string, error) {
 	type result struct {
@@ -67,14 +97,16 @@ func (s *InteractiveSelector) runPromptInputWithContext(ctx context.Context, pro
 func (s *InteractiveSelector) AskToSkipKind(ctx context.Context, schema interfaces.KindSchema) (bool, error) {
 	fmt.Printf("\n=== DataStore Kind: %s ===\n", schema.Name)
 	fmt.Printf("Total entities: %d\n", schema.Count)
-	fmt.Printf("Available fields: %d\n\n", len(schema.Fields))
+
+	displayFields := s.getDisplayFields(schema)
+	fmt.Printf("Available fields: %d\n\n", len(displayFields))
 
 	// Display a brief summary of the schema
-	if len(schema.Fields) > 0 {
+	if len(displayFields) > 0 {
 		fmt.Println("Field preview:")
-		for i, field := range schema.Fields {
+		for i, field := range displayFields {
 			if i >= 5 { // Show only first 5 fields in preview
-				fmt.Printf("  ... and %d more fields\n", len(schema.Fields)-5)
+				fmt.Printf("  ... and %d more fields\n", len(displayFields)-5)
 				break
 			}
 			displayName := field.Name
@@ -113,7 +145,8 @@ func (s *InteractiveSelector) AskToSkipKind(ctx context.Context, schema interfac
 func (s *InteractiveSelector) SelectKeys(ctx context.Context, schema interfaces.KindSchema) (interfaces.KeySelection, error) {
 	fmt.Printf("\n=== Configuring Keys for Kind: %s ===\n", schema.Name)
 	fmt.Printf("Total entities: %d\n", schema.Count)
-	fmt.Printf("Available fields: %d\n\n", len(schema.Fields))
+	displayFields := s.getDisplayFields(schema)
+	fmt.Printf("Available fields: %d\n\n", len(displayFields))
 
 	// Display schema information
 	s.displaySchema(schema)
@@ -163,7 +196,8 @@ func (s *InteractiveSelector) displaySchema(schema interfaces.KindSchema) {
 	fmt.Println("Field Information:")
 	fmt.Println("==================")
 
-	for i, field := range schema.Fields {
+	fields := s.getDisplayFields(schema)
+	for i, field := range fields {
 		displayName := field.Name
 		if field.DisplayName != "" {
 			displayName = field.DisplayName
@@ -183,10 +217,11 @@ func (s *InteractiveSelector) displaySchema(schema interfaces.KindSchema) {
 
 // selectPartitionKey prompts user to select a partition key
 func (s *InteractiveSelector) selectPartitionKey(ctx context.Context, schema interfaces.KindSchema) (string, error) {
-	fieldNames := make([]string, len(schema.Fields))
+	fields := s.getDisplayFields(schema)
+	fieldNames := make([]string, len(fields))
 	defaultCursorPos := 0
 
-	for i, field := range schema.Fields {
+	for i, field := range fields {
 		displayName := field.Name
 		if field.DisplayName != "" {
 			displayName = field.DisplayName
@@ -217,7 +252,7 @@ func (s *InteractiveSelector) selectPartitionKey(ctx context.Context, schema int
 		return "", err
 	}
 
-	return schema.Fields[idx].Name, nil
+	return fields[idx].Name, nil
 }
 
 // askForSortKey asks if the user wants to add a sort key
@@ -247,7 +282,7 @@ func (s *InteractiveSelector) selectSortKey(ctx context.Context, schema interfac
 	var availableFields []interfaces.FieldInfo
 	var fieldNames []string
 
-	for _, field := range schema.Fields {
+	for _, field := range s.getDisplayFields(schema) {
 		if field.Name != partitionKey {
 			displayName := field.Name
 			if field.DisplayName != "" {

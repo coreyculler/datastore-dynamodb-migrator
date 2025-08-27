@@ -127,7 +127,7 @@ export AWS_REGION="us-west-2"
 ```
 
 ### Analyze Specific Kind
-```bash
+```bashWSmake 
 ./datastore-dynamodb-migrator analyze --kind=Users --project=your-gcp-project
 ```
 
@@ -156,11 +156,11 @@ When running in interactive mode, the tool will:
 
 ### DataStore Entity Key Identifier
 
-The migration tool automatically includes the DataStore entity key identifier for every Kind. This represents the unique identifier from DataStore entity keys and is available for selection as the partition key.
+The migration tool automatically includes the DataStore entity key identifier for every Kind. This represents the unique identifier from DataStore entity keys and is available for selection as the partition key. In the interactive UI, this field is shown as "DataStore Primary Key (ID/Name)".
 
-**Field name selection:**
-- **`id`**: Used when no existing "id" field exists in the entity properties
-- **`__key__`**: Used when an "id" field already exists to avoid conflicts
+**Field name selection (internal):**
+- Internally stored as `PK` and derived from the DataStore entity key
+- When converting entities, if a collision-free attribute is needed, `id` or `__key__` may be used under the hood as described below, but the UI will display it as "DataStore Primary Key (ID/Name)"
 
 **Key characteristics:**
 - **Always available**: Present for all DataStore entities regardless of their schema
@@ -191,7 +191,7 @@ Total entities: 1,247
 Available fields: 8
 
 Field preview:
-  - id (string)
+  - DataStore Primary Key (ID/Name) (string)
   - email (string)
   - created_at (time.Time)
   - profile (map[string]interface{})
@@ -209,7 +209,7 @@ Available fields: 8
 
 Field Information:
 ==================
-1. id
+1. DataStore Primary Key (ID/Name)
    Type: string
    Sample: user_12345_key
 
@@ -230,13 +230,13 @@ Field Information:
    Sample: custom_user_123
 
 Select the Partition Key - this field should uniquely identify most entities:
-▶ id (string)
+▶ DataStore Primary Key (ID/Name) (string)
   email (string)
   created_at (time.Time)
   profile (map[string]interface{})
   user_id (string)
 
-✓ Partition Key: id (string)
+✓ Partition Key: DataStore Primary Key (ID/Name) (string)
 
 Do you want to add a Sort Key? (Useful for composite keys or ordering):
 ▶ No, partition key only
@@ -245,7 +245,7 @@ Do you want to add a Sort Key? (Useful for composite keys or ordering):
 ✓ No, partition key only
 
 === Key Selection Summary ===
-Partition Key: id
+Partition Key: DataStore Primary Key (ID/Name)
 Sort Key: None
 
 Confirm this key configuration?
@@ -301,7 +301,7 @@ Total entities: 15,234
 Available fields: 6
 
 Field preview:
-  - id (string)
+  - DataStore Primary Key (ID/Name) (string)
   - timestamp (time.Time)
   - action (string)
   - user_id (string)
