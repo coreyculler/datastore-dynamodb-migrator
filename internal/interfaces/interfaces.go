@@ -21,8 +21,9 @@ type KindSchema struct {
 
 // KeySelection represents the user's choice for primary and sort keys
 type KeySelection struct {
-	PartitionKey string  `json:"partition_key"`
-	SortKey      *string `json:"sort_key,omitempty"`
+	PartitionKey       string  `json:"partition_key"`
+	PartitionKeySource string  `json:"partition_key_source,omitempty"`
+	SortKey            *string `json:"sort_key,omitempty"`
 }
 
 // MigrationConfig holds configuration for a single Kind migration

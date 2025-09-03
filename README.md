@@ -148,6 +148,7 @@ When running in interactive mode, the tool will:
 4. **Key Selection**: For Kinds you choose to migrate, you'll be prompted to:
    - Select a partition key from available fields (including the DataStore entity key identifier)
    - Optionally select a sort key
+   - Optionally rename the DynamoDB partition key attribute (the value still comes from the selected source field)
    - Confirm table names
 5. **Migration Plan**: Review the complete migration plan before execution
 6. **Progress Tracking**: Monitor real-time progress with detailed statistics
@@ -160,7 +161,7 @@ The migration tool automatically includes the DataStore entity key identifier fo
 
 **Field name selection (internal):**
 - Internally stored as `PK` and derived from the DataStore entity key
-- When converting entities, if a collision-free attribute is needed, `id` or `__key__` may be used under the hood as described below, but the UI will display it as "DataStore Primary Key (ID/Name)"
+- You may rename the DynamoDB attribute used for the partition key. The alias affects only the attribute name in DynamoDB; the value continues to be sourced from the DataStore key (ID or Name) via the `PK` source
 
 **Key characteristics:**
 - **Always available**: Present for all DataStore entities regardless of their schema
@@ -174,6 +175,17 @@ The migration tool automatically includes the DataStore entity key identifier fo
 3. Falls back to the full key string representation if neither is available
 
 This field bridges the gap between DataStore's key-based identification system and DynamoDB's attribute-based keys, ensuring every entity has a reliable unique identifier for migration.
+
+### Attribute Renaming
+
+During key selection, after choosing the source field for the partition key, you can enter a custom DynamoDB attribute name. The tool will:
+- Use the chosen source field (e.g., `PK`) to populate the partition key value
+- Create the DynamoDB table using your alias as the key attribute name
+- Normalize the value to a string and remove any synthetic/metadata fields like `PK`, `__key__`, `__key_id__`, `__key_name__` from the final item payload
+
+### Metadata Stripping
+
+To preserve the original record shape, any metadata fields not present on the original DataStore record are removed before writing to DynamoDB. Examples include `__key__`, `__key_name__`, `__key_id__`. The tool injects only the alias attribute for the partition key you selected.
 
 ### Example Interactive Session
 

@@ -208,22 +208,7 @@ func (a *EntityAnalyzer) ConvertForDynamoDB(entity interface{}, config interface
 			result[fieldName] = convertedValue
 		}
 
-		// Add the DataStore key identifier field
-		// Try "id" first, then "__key__" as fallback
-		keyFieldName := "id"
-		if _, exists := result["id"]; exists {
-			keyFieldName = "__key__"
-		}
-
-		keyValue := a.GetFieldValue(entity, keyFieldName)
-		if keyValue != nil {
-			convertedValue, err := a.convertValueForDynamoDB(keyValue)
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert key field %s: %w", keyFieldName, err)
-			}
-			result[keyFieldName] = convertedValue
-		}
-
+		// Do not inject additional metadata fields
 		return result, nil
 	}
 

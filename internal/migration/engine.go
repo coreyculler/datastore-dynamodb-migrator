@@ -93,16 +93,20 @@ func (e *Engine) ValidateConfig(config interfaces.MigrationConfig) error {
 		return fmt.Errorf("schema cannot be nil")
 	}
 
-	// Validate that partition key exists in schema
+	// Validate that partition key source exists in schema (fallback to alias for backwards-compat)
+	sourceName := config.KeySelection.PartitionKeySource
+	if sourceName == "" {
+		sourceName = config.KeySelection.PartitionKey
+	}
 	partitionKeyExists := false
 	for _, field := range config.Schema.Fields {
-		if field.Name == config.KeySelection.PartitionKey {
+		if field.Name == sourceName {
 			partitionKeyExists = true
 			break
 		}
 	}
 	if !partitionKeyExists {
-		return fmt.Errorf("partition key '%s' not found in schema", config.KeySelection.PartitionKey)
+		return fmt.Errorf("partition key '%s' not found in schema", sourceName)
 	}
 
 	// Validate sort key if provided
@@ -118,7 +122,7 @@ func (e *Engine) ValidateConfig(config interfaces.MigrationConfig) error {
 			return fmt.Errorf("sort key '%s' not found in schema", *config.KeySelection.SortKey)
 		}
 
-		// Ensure sort key is different from partition key
+		// Ensure sort key is different from partition key alias
 		if *config.KeySelection.SortKey == config.KeySelection.PartitionKey {
 			return fmt.Errorf("sort key cannot be the same as partition key")
 		}
@@ -470,6 +474,9 @@ func (e *Engine) processBatch(ctx context.Context, entities []interface{}, confi
 		// Ensure required keys are present on the item map (inject if missing)
 		ensurePartitionKey(item, config)
 
+		// Cleanup metadata/internal fields
+		cleanupMetadataFields(item, config)
+
 		// Ensure required keys are present
 		if err := e.validateRequiredKeys(item, config); err != nil {
 			return fmt.Errorf("validation failed: %w", err)
@@ -497,8 +504,12 @@ func ensurePartitionKey(item map[string]interface{}, config interfaces.Migration
 		item[pkName] = stringifyValue(item[pkName])
 		return
 	}
-	// Try common sources
-	candidates := []string{"PK", "__key_name__", "__key_id__", "__key__", "id"}
+	// Try source then common sources
+	candidates := []string{}
+	if config.KeySelection.PartitionKeySource != "" {
+		candidates = append(candidates, config.KeySelection.PartitionKeySource)
+	}
+	candidates = append(candidates, "PK", "__key_name__", "__key_id__", "__key__", "id")
 	for _, c := range candidates {
 		if v, ok := item[c]; ok {
 			item[pkName] = stringifyValue(v)
@@ -548,6 +559,20 @@ func stringifyValue(v interface{}) string {
 		return t.String()
 	default:
 		return fmt.Sprintf("%v", t)
+	}
+}
+
+// cleanupMetadataFields removes internal metadata fields (e.g., __key__*) and synthetic PK when aliased
+func cleanupMetadataFields(item map[string]interface{}, config interfaces.MigrationConfig) {
+	// Remove any fields that start with "__"
+	for k := range item {
+		if len(k) >= 2 && k[0] == '_' && k[1] == '_' {
+			delete(item, k)
+		}
+	}
+	// If user renamed PK alias, remove synthetic PK key field if present
+	if config.KeySelection.PartitionKey != "PK" {
+		delete(item, "PK")
 	}
 }
 

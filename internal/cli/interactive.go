@@ -151,11 +151,37 @@ func (s *InteractiveSelector) SelectKeys(ctx context.Context, schema interfaces.
 	// Display schema information
 	s.displaySchema(schema)
 
-	// Select partition key
-	partitionKey, err := s.selectPartitionKey(ctx, schema)
+	// Select partition key (source in the entity)
+	partitionKeySource, err := s.selectPartitionKey(ctx, schema)
 	if err != nil {
 		return interfaces.KeySelection{}, fmt.Errorf("failed to select partition key: %w", err)
 	}
+
+	// Ask for a DynamoDB attribute name (alias) for the partition key
+	aliasPrompt := promptui.Prompt{
+		Label:   fmt.Sprintf("Enter DynamoDB attribute name for Partition Key (source: %s)", partitionKeySource),
+		Default: partitionKeySource,
+		Validate: func(input string) error {
+			input = strings.TrimSpace(input)
+			if input == "" {
+				return fmt.Errorf("attribute name cannot be empty")
+			}
+			for _, char := range input {
+				if !((char >= 'a' && char <= 'z') ||
+					(char >= 'A' && char <= 'Z') ||
+					(char >= '0' && char <= '9') ||
+					char == '-' || char == '_' || char == '.') {
+					return fmt.Errorf("attribute name can only contain letters, numbers, hyphens, underscores, and periods")
+				}
+			}
+			return nil
+		},
+	}
+	partitionKeyAlias, err := s.runPromptInputWithContext(ctx, &aliasPrompt)
+	if err != nil {
+		return interfaces.KeySelection{}, fmt.Errorf("failed to get partition key attribute name: %w", err)
+	}
+	partitionKeyAlias = strings.TrimSpace(partitionKeyAlias)
 
 	// Ask if user wants a sort key
 	wantsSortKey, err := s.askForSortKey(ctx)
@@ -165,7 +191,7 @@ func (s *InteractiveSelector) SelectKeys(ctx context.Context, schema interfaces.
 
 	var sortKey *string
 	if wantsSortKey {
-		selectedSortKey, err := s.selectSortKey(ctx, schema, partitionKey)
+		selectedSortKey, err := s.selectSortKey(ctx, schema, partitionKeySource)
 		if err != nil {
 			return interfaces.KeySelection{}, fmt.Errorf("failed to select sort key: %w", err)
 		}
@@ -173,8 +199,9 @@ func (s *InteractiveSelector) SelectKeys(ctx context.Context, schema interfaces.
 	}
 
 	keySelection := interfaces.KeySelection{
-		PartitionKey: partitionKey,
-		SortKey:      sortKey,
+		PartitionKey:       partitionKeyAlias,
+		PartitionKeySource: partitionKeySource,
+		SortKey:            sortKey,
 	}
 
 	// Confirm the selection
@@ -322,16 +349,23 @@ func (s *InteractiveSelector) confirmKeySelection(ctx context.Context, selection
 	fmt.Println("\n=== Key Selection Summary ===")
 
 	// Find the partition key field and get its display name
-	partitionDisplayName := selection.PartitionKey
+	partitionDisplayName := selection.PartitionKeySource
+	if partitionDisplayName == "" {
+		partitionDisplayName = selection.PartitionKey
+	}
 	for _, field := range schema.Fields {
-		if field.Name == selection.PartitionKey {
+		if field.Name == partitionDisplayName {
 			if field.DisplayName != "" {
 				partitionDisplayName = field.DisplayName
 			}
 			break
 		}
 	}
-	fmt.Printf("Partition Key: %s\n", partitionDisplayName)
+	if selection.PartitionKeySource != "" && selection.PartitionKeySource != selection.PartitionKey {
+		fmt.Printf("Partition Key: %s (DynamoDB attribute: %s)\n", partitionDisplayName, selection.PartitionKey)
+	} else {
+		fmt.Printf("Partition Key: %s\n", partitionDisplayName)
+	}
 
 	if selection.SortKey != nil {
 		// Find the sort key field and get its display name
@@ -413,16 +447,23 @@ func (s *InteractiveSelector) ConfirmMigration(ctx context.Context, configs []in
 		fmt.Printf("   Entities: %d\n", config.Schema.Count)
 
 		// Find the partition key field and get its display name
-		partitionDisplayName := config.KeySelection.PartitionKey
+		partitionDisplayName := config.KeySelection.PartitionKeySource
+		if partitionDisplayName == "" {
+			partitionDisplayName = config.KeySelection.PartitionKey
+		}
 		for _, field := range config.Schema.Fields {
-			if field.Name == config.KeySelection.PartitionKey {
+			if field.Name == partitionDisplayName {
 				if field.DisplayName != "" {
 					partitionDisplayName = field.DisplayName
 				}
 				break
 			}
 		}
-		fmt.Printf("   Partition Key: %s\n", partitionDisplayName)
+		if config.KeySelection.PartitionKeySource != "" && config.KeySelection.PartitionKeySource != config.KeySelection.PartitionKey {
+			fmt.Printf("   Partition Key: %s (DynamoDB attribute: %s)\n", partitionDisplayName, config.KeySelection.PartitionKey)
+		} else {
+			fmt.Printf("   Partition Key: %s\n", partitionDisplayName)
+		}
 
 		if config.KeySelection.SortKey != nil {
 			// Find the sort key field and get its display name

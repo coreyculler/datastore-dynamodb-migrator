@@ -23,6 +23,8 @@ This utility migrates Google Cloud Platform (GCP) DataStore tables to Amazon Web
   - Primary key (partition key) for each Kind
   - Sort key (optional) for each Kind if needed
 - Provide field type information to help with key selection decisions
+  - Allow renaming of the DynamoDB partition key attribute while sourcing its value from the DataStore entity key (ID/Name)
+  - Strip metadata fields not present on original records before writing (e.g., `__key__`, `__key_id__`, `__key_name__`)
 
 ### Language Preference
 - **Primary Choice**: Golang (preferred for its strong concurrency, AWS SDK support, and introspection capabilities)
@@ -44,6 +46,15 @@ This utility migrates Google Cloud Platform (GCP) DataStore tables to Amazon Web
 - Log all operations for debugging and audit purposes
 - Handle large datasets efficiently (streaming/batching)
 - Validate key selections before table creation
+
+### Key Selection Details
+
+- DataStore entity key identifier is exposed as an always-available field with display name "DataStore Primary Key (ID/Name)" and internal name `PK`.
+- Users may rename the DynamoDB partition key attribute (alias) during the interactive flow. The tool will:
+  - Continue sourcing the value from the DataStore key via `PK` (or the selected source field)
+  - Store the alias as `PartitionKey` and the source as `PartitionKeySource` in the configuration
+  - Infer the DynamoDB key attribute type from the source field while using the alias for the attribute name
+- Before writing items to DynamoDB, the engine removes metadata/internal fields that weren't on the original source record, including `__key__`, `__key_name__`, `__key_id__`. If the PK is aliased, the synthetic `PK` field is also removed from the item payload.
 
 ### Expected File Structure
 ```

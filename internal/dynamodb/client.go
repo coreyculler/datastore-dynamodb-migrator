@@ -95,7 +95,7 @@ func (c *Client) CreateTable(ctx context.Context, config interfaces.MigrationCon
 	attributeDefinitions := []types.AttributeDefinition{
 		{
 			AttributeName: aws.String(config.KeySelection.PartitionKey),
-			AttributeType: c.getAttributeType(config.KeySelection.PartitionKey, config.Schema),
+			AttributeType: c.getAttributeType(getPKTypeField(config), config.Schema),
 		},
 	}
 
@@ -134,7 +134,7 @@ func (c *Client) CreateTable(ctx context.Context, config interfaces.MigrationCon
 		// In dry-run mode, just show what would be created
 		fmt.Printf("🔍 DRY RUN: Would create table '%s' with:\n", config.TargetTable)
 		fmt.Printf("  - Partition Key: %s (%s)\n", config.KeySelection.PartitionKey,
-			c.getAttributeType(config.KeySelection.PartitionKey, config.Schema))
+			c.getAttributeType(getPKTypeField(config), config.Schema))
 		if config.KeySelection.SortKey != nil && *config.KeySelection.SortKey != "" {
 			fmt.Printf("  - Sort Key: %s (%s)\n", *config.KeySelection.SortKey,
 				c.getAttributeType(*config.KeySelection.SortKey, config.Schema))
@@ -401,6 +401,14 @@ func (c *Client) getAttributeType(fieldName string, schema *interfaces.KindSchem
 	return types.ScalarAttributeTypeS
 }
 
+// getPKTypeField returns the field name that should be used to determine the attribute type for the PK
+func getPKTypeField(config interfaces.MigrationConfig) string {
+	if config.KeySelection.PartitionKeySource != "" {
+		return config.KeySelection.PartitionKeySource
+	}
+	return config.KeySelection.PartitionKey
+}
+
 // truncateTable deletes and recreates a table to clear its contents.
 func (c *Client) truncateTable(ctx context.Context, tableName string, config interfaces.MigrationConfig, dryRun bool) error {
 	if dryRun {
@@ -444,7 +452,7 @@ func (c *Client) createTableInternal(ctx context.Context, config interfaces.Migr
 	attributeDefinitions := []types.AttributeDefinition{
 		{
 			AttributeName: aws.String(config.KeySelection.PartitionKey),
-			AttributeType: c.getAttributeType(config.KeySelection.PartitionKey, config.Schema),
+			AttributeType: c.getAttributeType(getPKTypeField(config), config.Schema),
 		},
 	}
 
@@ -477,7 +485,7 @@ func (c *Client) createTableInternal(ctx context.Context, config interfaces.Migr
 		// In dry-run mode, just show what would be created
 		fmt.Printf("🔍 DRY RUN: Would create table '%s' with:\n", config.TargetTable)
 		fmt.Printf("  - Partition Key: %s (%s)\n", config.KeySelection.PartitionKey,
-			c.getAttributeType(config.KeySelection.PartitionKey, config.Schema))
+			c.getAttributeType(getPKTypeField(config), config.Schema))
 		if config.KeySelection.SortKey != nil && *config.KeySelection.SortKey != "" {
 			fmt.Printf("  - Sort Key: %s (%s)\n", *config.KeySelection.SortKey,
 				c.getAttributeType(*config.KeySelection.SortKey, config.Schema))
