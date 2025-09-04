@@ -13,6 +13,7 @@ A command-line tool to migrate Google Cloud Platform (GCP) DataStore entities to
 - **Automatic Table Creation**: Creates DynamoDB tables with optimal configurations
 - **Robust Error Handling**: Graceful failure recovery and detailed error reporting
 - **Smart Kind Filtering**: Automatically excludes DataStore system entities (kinds beginning with `__Stat`) from migration
+ - **S3 Offloading for Large Records**: Optionally store full records as JSON in S3 and keep a minimal searchable projection in DynamoDB, with an added `S3ObjectPath` attribute
 
 ## Prerequisites
 
@@ -74,6 +75,7 @@ The tool can be configured through environment variables or command-line flags.
 | `MIGRATION_BATCH_SIZE` | Number of entities per batch | `100` |
 | `MIGRATION_MAX_WORKERS` | Maximum concurrent workers | `5` |
 | `MIGRATION_DRY_RUN` | Enable dry run mode | `false` |
+| `MIGRATION_S3_BUCKET` | Default S3 bucket for full-record JSON storage | none |
 
 ### Command-Line Flags
 
@@ -150,6 +152,7 @@ When running in interactive mode, the tool will:
    - Optionally select a sort key
    - Optionally rename the DynamoDB partition key attribute (the value still comes from the selected source field)
    - Confirm table names
+5. **S3 Storage & Projection**: Optionally enable S3 storage for full records and choose which fields to keep in DynamoDB
 5. **Migration Plan**: Review the complete migration plan before execution
 6. **Progress Tracking**: Monitor real-time progress with detailed statistics
 
@@ -186,6 +189,26 @@ During key selection, after choosing the source field for the partition key, you
 ### Metadata Stripping
 
 To preserve the original record shape, any metadata fields not present on the original DataStore record are removed before writing to DynamoDB. Examples include `__key__`, `__key_name__`, `__key_id__`. The tool injects only the alias attribute for the partition key you selected.
+
+## S3 Offloading Mode
+
+You can choose to store the entire record in an Amazon S3 bucket as a JSON object while keeping only a minimal projection in DynamoDB for search/indexing:
+
+- When enabled per Kind, every entity is uploaded to S3 as a JSON file.
+- The S3 object key uses the Kind name as a kebab-case prefix and the primary key as the filename: `<kebab-kind>/<primary-key>.json`.
+  - Example: Kind `UserActions` → prefix `user-actions/`; PK `abc123` → `user-actions/abc123.json`.
+- The full S3 path is added to the DynamoDB item as `S3ObjectPath` (e.g., `s3://my-bucket/user-actions/abc123.json`).
+- You will be prompted to select which fields should remain in DynamoDB. The partition/sort keys and `S3ObjectPath` are always included.
+- If you leave the projection selection blank, all fields are kept in DynamoDB in addition to S3.
+
+### Configuration
+
+- Default bucket can be provided via `MIGRATION_S3_BUCKET`. You can override it per Kind during interactive prompts.
+
+### Notes
+
+- S3 JSON uses the normalized entity representation used for DynamoDB conversion (metadata fields like `__key__` are omitted).
+- This mode is useful when records are too large for DynamoDB item size limits or when you prefer to store rich payloads externally.
 
 ### Example Interactive Session
 

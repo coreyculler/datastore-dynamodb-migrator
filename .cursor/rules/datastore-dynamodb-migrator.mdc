@@ -56,6 +56,17 @@ This utility migrates Google Cloud Platform (GCP) DataStore tables to Amazon Web
   - Infer the DynamoDB key attribute type from the source field while using the alias for the attribute name
 - Before writing items to DynamoDB, the engine removes metadata/internal fields that weren't on the original source record, including `__key__`, `__key_name__`, `__key_id__`. If the PK is aliased, the synthetic `PK` field is also removed from the item payload.
 
+### S3 Offloading (Large Records)
+
+- For Kinds whose records may exceed DynamoDB's item size limits, provide an option to store full records in S3 as JSON.
+- Interactive prompts per Kind should ask whether to enable S3 storage and, if enabled:
+  - Ask for the S3 bucket (default from `MIGRATION_S3_BUCKET` if present)
+  - Partition objects using the Kind name converted to kebab-case as the prefix (e.g., `UserActions` → `user-actions/`)
+  - Name objects using the record's primary key with a `.json` suffix
+  - Prompt to select which fields should still be written to DynamoDB as a minimal projection
+  - Always add the full `s3://` path as `S3ObjectPath` in the DynamoDB item
+  - Always include key attributes in DynamoDB regardless of projection
+
 ### Expected File Structure
 ```
 ├── main.go                 # Entry point and CLI setup

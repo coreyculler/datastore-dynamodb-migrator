@@ -32,6 +32,10 @@ type MigrationConfig struct {
 	TargetTable  string       `json:"target_table"`
 	KeySelection KeySelection `json:"key_selection"`
 	Schema       *KindSchema  `json:"schema"`
+	// S3Storage controls whether items for this Kind are persisted to S3 as JSON
+	S3Storage *S3StorageOptions `json:"s3_storage,omitempty"`
+	// DynamoDBProjectionFields limits which fields are written to DynamoDB (always includes keys)
+	DynamoDBProjectionFields []string `json:"dynamodb_projection_fields,omitempty"`
 }
 
 // MigrationProgress tracks the progress of a migration
@@ -73,4 +77,18 @@ type MigrationEngine interface {
 	MigrateAll(ctx context.Context, configs []MigrationConfig, dryRun bool) (<-chan MigrationProgress, error)
 	ValidateConfig(config MigrationConfig) error
 	SetDryRun(dryRun bool)
+}
+
+// S3Client interface for interacting with AWS S3
+type S3Client interface {
+	PutJSON(ctx context.Context, bucket string, key string, data interface{}, dryRun bool) (string, error)
+	Close() error
+}
+
+// S3StorageOptions configures S3 persistence behavior for a Kind
+type S3StorageOptions struct {
+	Enabled bool   `json:"enabled"`
+	Bucket  string `json:"bucket"`
+	// ObjectPrefix is the key prefix (e.g., user-actions/) derived from Kind name (kebab-case)
+	ObjectPrefix string `json:"object_prefix"`
 }

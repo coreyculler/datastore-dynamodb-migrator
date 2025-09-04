@@ -14,6 +14,7 @@ import (
 type Engine struct {
 	datastoreClient interfaces.DataStoreClient
 	dynamoClient    interfaces.DynamoDBClient
+	s3Client        interfaces.S3Client
 	analyzer        interfaces.Introspector
 	batchSize       int
 	maxWorkers      int
@@ -31,6 +32,13 @@ func NewEngine(datastoreClient interfaces.DataStoreClient, dynamoClient interfac
 		batchSize:       100, // Default batch size for processing
 		maxWorkers:      5,   // Default number of concurrent workers
 	}
+}
+
+// SetS3Client sets the S3 client (optional)
+func (e *Engine) SetS3Client(s3 interfaces.S3Client) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.s3Client = s3
 }
 
 // SetAnalyzer sets the introspector for the engine
@@ -125,6 +133,16 @@ func (e *Engine) ValidateConfig(config interfaces.MigrationConfig) error {
 		// Ensure sort key is different from partition key alias
 		if *config.KeySelection.SortKey == config.KeySelection.PartitionKey {
 			return fmt.Errorf("sort key cannot be the same as partition key")
+		}
+	}
+
+	// Validate S3 settings if enabled
+	if config.S3Storage != nil && config.S3Storage.Enabled {
+		if config.S3Storage.Bucket == "" {
+			return fmt.Errorf("S3 bucket must be specified when S3 storage is enabled")
+		}
+		if config.S3Storage.ObjectPrefix == "" {
+			return fmt.Errorf("S3 object prefix must be specified when S3 storage is enabled")
 		}
 	}
 
@@ -474,8 +492,30 @@ func (e *Engine) processBatch(ctx context.Context, entities []interface{}, confi
 		// Ensure required keys are present on the item map (inject if missing)
 		ensurePartitionKey(item, config)
 
+		// If S3 storage is enabled, upload full item JSON and add S3ObjectPath
+		if config.S3Storage != nil && config.S3Storage.Enabled {
+			e.mu.RLock()
+			s3 := e.s3Client
+			e.mu.RUnlock()
+			if s3 == nil {
+				return fmt.Errorf("S3 storage is enabled but no S3 client is configured")
+			}
+			pk := stringifyValue(item[config.KeySelection.PartitionKey])
+			objectKey := fmt.Sprintf("%s/%s.json", config.S3Storage.ObjectPrefix, pk)
+			path, err := s3.PutJSON(ctx, config.S3Storage.Bucket, objectKey, item, dryRun)
+			if err != nil {
+				return fmt.Errorf("failed to upload S3 object for key %s: %w", pk, err)
+			}
+			item["S3ObjectPath"] = path
+		}
+
 		// Cleanup metadata/internal fields
 		cleanupMetadataFields(item, config)
+
+		// Apply projection filtering if configured
+		if len(config.DynamoDBProjectionFields) > 0 {
+			item = projectItem(item, config)
+		}
 
 		// Ensure required keys are present
 		if err := e.validateRequiredKeys(item, config); err != nil {
@@ -574,6 +614,38 @@ func cleanupMetadataFields(item map[string]interface{}, config interfaces.Migrat
 	if config.KeySelection.PartitionKey != "PK" {
 		delete(item, "PK")
 	}
+}
+
+// projectItem returns a filtered item containing only projection fields, keys, and S3ObjectPath
+func projectItem(full map[string]interface{}, config interfaces.MigrationConfig) map[string]interface{} {
+	result := make(map[string]interface{})
+	// Always include keys
+	result[config.KeySelection.PartitionKey] = full[config.KeySelection.PartitionKey]
+	if config.KeySelection.SortKey != nil && *config.KeySelection.SortKey != "" {
+		if v, ok := full[*config.KeySelection.SortKey]; ok {
+			result[*config.KeySelection.SortKey] = v
+		}
+	}
+	// Include S3ObjectPath if present
+	if v, ok := full["S3ObjectPath"]; ok {
+		result["S3ObjectPath"] = v
+	}
+	allowed := map[string]struct{}{}
+	for _, f := range config.DynamoDBProjectionFields {
+		allowed[f] = struct{}{}
+	}
+	for f := range allowed {
+		if f == config.KeySelection.PartitionKey {
+			continue
+		}
+		if config.KeySelection.SortKey != nil && *config.KeySelection.SortKey == f {
+			continue
+		}
+		if v, ok := full[f]; ok {
+			result[f] = v
+		}
+	}
+	return result
 }
 
 // validateRequiredKeys ensures that required keys are present in the item

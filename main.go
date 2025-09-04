@@ -17,6 +17,7 @@ import (
 	"github.com/coreyculler/datastore-dynamodb-migrator/internal/interfaces"
 	"github.com/coreyculler/datastore-dynamodb-migrator/internal/introspection"
 	"github.com/coreyculler/datastore-dynamodb-migrator/internal/migration"
+	s3store "github.com/coreyculler/datastore-dynamodb-migrator/internal/s3store"
 	"github.com/spf13/cobra"
 )
 
@@ -42,8 +43,8 @@ func main() {
 		Use:   "datastore-migrator",
 		Short: "Migrate GCP DataStore to AWS DynamoDB",
 		Long: `A command-line tool to migrate Google Cloud Platform DataStore entities 
-to Amazon Web Services DynamoDB tables. Each DataStore Kind becomes a separate 
-DynamoDB table with user-configured primary and sort keys.`,
+	to Amazon Web Services DynamoDB tables. Each DataStore Kind becomes a separate 
+	DynamoDB table with user-configured primary and sort keys.`,
 		Version: fmt.Sprintf("%s (build: %s)", version, build),
 		RunE:    runMigration,
 	}
@@ -136,6 +137,15 @@ func runMigration(cmd *cobra.Command, args []string) error {
 	// Set up the analyzer
 	analyzer := introspection.NewEntityAnalyzer()
 	engine.SetAnalyzer(analyzer)
+
+	// Set up S3 client
+	s3Client, err := s3store.NewClient(ctx)
+	if err == nil {
+		engine.SetS3Client(s3Client)
+		defer s3Client.Close()
+	} else if debug {
+		fmt.Printf("DEBUG: Failed to initialize S3 client: %v\n", err)
+	}
 
 	// Get list of Kinds
 	fmt.Println("📋 Discovering DataStore Kinds...")
@@ -248,11 +258,24 @@ func runMigration(cmd *cobra.Command, args []string) error {
 				continue
 			}
 
+			// Ask for S3 storage and projection fields
+			s3Options, projection, err := selector.SelectS3OptionsAndProjection(ctx, *schema)
+			if err != nil {
+				if ctx.Err() != nil {
+					fmt.Println("\nOperation cancelled by user")
+					return nil
+				}
+				fmt.Printf("❌ Failed to configure S3 options for Kind %s: %v\n", kind, err)
+				continue
+			}
+
 			config := interfaces.MigrationConfig{
-				SourceKind:   kind,
-				TargetTable:  tableName,
-				KeySelection: keySelection,
-				Schema:       schema,
+				SourceKind:               kind,
+				TargetTable:              tableName,
+				KeySelection:             keySelection,
+				Schema:                   schema,
+				S3Storage:                s3Options,
+				DynamoDBProjectionFields: projection,
 			}
 
 			migrationConfigs = append(migrationConfigs, config)

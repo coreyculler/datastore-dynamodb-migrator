@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 
 	"github.com/coreyculler/datastore-dynamodb-migrator/internal/interfaces"
@@ -480,6 +482,17 @@ func (s *InteractiveSelector) ConfirmMigration(ctx context.Context, configs []in
 		} else {
 			fmt.Printf("   Sort Key: None\n")
 		}
+
+		if config.S3Storage != nil && config.S3Storage.Enabled {
+			fmt.Printf("   S3 Storage: Enabled (bucket: %s, prefix: %s/)\n", config.S3Storage.Bucket, config.S3Storage.ObjectPrefix)
+			if len(config.DynamoDBProjectionFields) > 0 {
+				fmt.Printf("   DynamoDB Fields: %s\n", strings.Join(config.DynamoDBProjectionFields, ", "))
+			} else {
+				fmt.Printf("   DynamoDB Fields: All fields\n")
+			}
+		} else {
+			fmt.Printf("   S3 Storage: Disabled\n")
+		}
 		fmt.Println()
 	}
 
@@ -553,4 +566,126 @@ func (s *InteractiveSelector) HandleExistingTable(ctx context.Context, tableName
 	default:
 		return "skip", nil // Should not happen, but default to safe option.
 	}
+}
+
+// SelectS3OptionsAndProjection asks whether to store full records in S3 and which fields to keep in DynamoDB
+func (s *InteractiveSelector) SelectS3OptionsAndProjection(ctx context.Context, schema interfaces.KindSchema) (*interfaces.S3StorageOptions, []string, error) {
+	prompt := promptui.Select{
+		Label: "Store full records in S3 as JSON?",
+		Items: []string{"No", "Yes"},
+		Templates: &promptui.SelectTemplates{
+			Label:    "{{ . }}:",
+			Active:   "▶ {{ . }}",
+			Inactive: "  {{ . }}",
+			Selected: "✓ {{ . }}",
+		},
+	}
+	idx, _, err := s.runPromptWithContext(ctx, &prompt)
+	if err != nil {
+		return nil, nil, err
+	}
+	if idx == 0 {
+		return nil, nil, nil
+	}
+
+	defaultBucket := strings.TrimSpace(os.Getenv("MIGRATION_S3_BUCKET"))
+	bucketPrompt := promptui.Prompt{
+		Label:   "Enter S3 bucket name",
+		Default: defaultBucket,
+		Validate: func(input string) error {
+			input = strings.TrimSpace(input)
+			if input == "" {
+				return fmt.Errorf("bucket name cannot be empty")
+			}
+			// basic bucket name validation
+			matched, _ := regexp.MatchString(`^[a-z0-9.-]{3,63}$`, input)
+			if !matched {
+				return fmt.Errorf("invalid bucket name format")
+			}
+			return nil
+		},
+	}
+	bucket, err := s.runPromptInputWithContext(ctx, &bucketPrompt)
+	if err != nil {
+		return nil, nil, err
+	}
+	bucket = strings.TrimSpace(bucket)
+
+	prefix := toKebabCase(schema.Name)
+	options := &interfaces.S3StorageOptions{
+		Enabled:      true,
+		Bucket:       bucket,
+		ObjectPrefix: prefix,
+	}
+
+	// Projection selection
+	fields := s.getDisplayFields(schema)
+	fmt.Println("\nSelect fields to keep in DynamoDB (comma-separated numbers). Leave blank for all fields:")
+	for i, f := range fields {
+		dn := f.Name
+		if f.DisplayName != "" {
+			dn = f.DisplayName
+		}
+		fmt.Printf("%d) %s (%s)\n", i+1, dn, f.TypeName)
+	}
+	projPrompt := promptui.Prompt{
+		Label:   "Fields to keep",
+		Default: "",
+	}
+	answer, err := s.runPromptInputWithContext(ctx, &projPrompt)
+	if err != nil {
+		return options, nil, nil // if cancelled, just keep all
+	}
+	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return options, nil, nil
+	}
+	indices := parseIndexList(answer)
+	var selected []string
+	for _, idx := range indices {
+		if idx > 0 && idx <= len(fields) {
+			selected = append(selected, fields[idx-1].Name)
+		}
+	}
+	return options, selected, nil
+}
+
+func toKebabCase(s string) string {
+	var out []rune
+	for i, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 && s[i-1] != '-' {
+				out = append(out, '-')
+			}
+			out = append(out, r+('a'-'A'))
+		} else if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			out = append(out, r)
+		} else {
+			out = append(out, '-')
+		}
+	}
+	return strings.Trim(strings.ReplaceAll(string(out), "--", "-"), "-")
+}
+
+func parseIndexList(s string) []int {
+	var result []int
+	parts := strings.Split(s, ",")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		val := 0
+		for _, ch := range p {
+			if ch < '0' || ch > '9' {
+				val = 0
+				break
+			}
+			val = val*10 + int(ch-'0')
+		}
+		if val > 0 {
+			result = append(result, val)
+		}
+	}
+	return result
 }
