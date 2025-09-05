@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -260,6 +261,15 @@ func (c *Client) putItemsBatch(ctx context.Context, tableName string, items []ma
 
 	result, err := c.client.BatchWriteItem(ctx, input)
 	if err != nil {
+		// If the batch failed due to item size constraints, retry items individually.
+		if isItemSizeExceededError(err) {
+			indivErrs := c.putItemsIndividually(ctx, tableName, items)
+			if len(indivErrs) == 0 {
+				return nil
+			}
+			// Return a summarized error including count and a sample error for context
+			return fmt.Errorf("batch write failed due to item size; retried individually: %d item(s) failed, first error: %v", len(indivErrs), indivErrs[0])
+		}
 		return fmt.Errorf("batch write failed: %w", err)
 	}
 
@@ -270,6 +280,37 @@ func (c *Client) putItemsBatch(ctx context.Context, tableName string, items []ma
 	}
 
 	return nil
+}
+
+// isItemSizeExceededError checks whether the error indicates an item-size validation failure.
+func isItemSizeExceededError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "validationexception") && strings.Contains(msg, "item size")
+}
+
+// putItemsIndividually attempts to put each item one-by-one. It returns a slice of errors
+// corresponding to items that still failed when written individually.
+func (c *Client) putItemsIndividually(ctx context.Context, tableName string, items []map[string]interface{}) []error {
+	var errs []error
+	for idx, item := range items {
+		av, convErr := c.convertToDynamoDBItem(item)
+		if convErr != nil {
+			errs = append(errs, fmt.Errorf("item %d convert failed: %w", idx, convErr))
+			continue
+		}
+
+		_, putErr := c.client.PutItem(ctx, &dynamodb.PutItemInput{
+			TableName: &tableName,
+			Item:      av,
+		})
+		if putErr != nil {
+			errs = append(errs, fmt.Errorf("item %d put failed: %w", idx, putErr))
+		}
+	}
+	return errs
 }
 
 // retryUnprocessedItems retries unprocessed items with exponential backoff

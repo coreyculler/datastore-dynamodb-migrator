@@ -20,6 +20,49 @@ func NewInteractiveSelector() *InteractiveSelector {
 	return &InteractiveSelector{}
 }
 
+// SelectDatabaseID prompts the user to select a Datastore/Firestore database ID.
+// The provided list should include "(default)" entry when appropriate.
+func (s *InteractiveSelector) SelectDatabaseID(ctx context.Context, projectID string, databaseIDs []string) (string, error) {
+	if len(databaseIDs) == 0 {
+		return "", nil
+	}
+
+	display := make([]string, len(databaseIDs))
+	defaultIndex := 0
+	for i, id := range databaseIDs {
+		if id == "" || id == "(default)" {
+			display[i] = "(default)"
+			defaultIndex = i
+		} else {
+			display[i] = id
+		}
+	}
+
+	prompt := promptui.Select{
+		Label:     fmt.Sprintf("Select Datastore database for project %s", projectID),
+		Items:     display,
+		CursorPos: defaultIndex,
+		Templates: &promptui.SelectTemplates{
+			Label:    "{{ . }}:",
+			Active:   "▶ {{ . }}",
+			Inactive: "  {{ . }}",
+			Selected: "✓ {{ . }}",
+		},
+		Size: 10,
+	}
+
+	idx, _, err := s.runPromptWithContext(ctx, &prompt)
+	if err != nil {
+		return "", err
+	}
+
+	chosen := databaseIDs[idx]
+	if chosen == "(default)" {
+		return "", nil
+	}
+	return chosen, nil
+}
+
 // shouldHideFieldFromDisplay determines whether a field should be hidden from
 // CLI previews and selection prompts. We hide explicit "id" and "name"
 // fields to avoid confusion with the synthetic DataStore Primary Key (PK),

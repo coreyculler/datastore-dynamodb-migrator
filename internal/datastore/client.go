@@ -19,13 +19,22 @@ type Client struct {
 	mu        sync.RWMutex
 }
 
-// NewClient creates a new DataStore client
-func NewClient(ctx context.Context, projectID string) (*Client, error) {
+// NewClientWithDatabase creates a new DataStore client for the given project and optional database ID.
+// When databaseID is empty, the default database is used.
+func NewClientWithDatabase(ctx context.Context, projectID string, databaseID string) (*Client, error) {
 	if projectID == "" {
 		return nil, fmt.Errorf("project ID is required")
 	}
 
-	client, err := datastore.NewClient(ctx, projectID)
+	var (
+		client *datastore.Client
+		err    error
+	)
+	if strings.TrimSpace(databaseID) != "" {
+		client, err = datastore.NewClientWithDatabase(ctx, projectID, databaseID)
+	} else {
+		client, err = datastore.NewClient(ctx, projectID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create datastore client: %w", err)
 	}
@@ -34,6 +43,11 @@ func NewClient(ctx context.Context, projectID string) (*Client, error) {
 		client:    client,
 		projectID: projectID,
 	}, nil
+}
+
+// NewClient creates a new DataStore client using the default database for backward compatibility.
+func NewClient(ctx context.Context, projectID string) (*Client, error) {
+	return NewClientWithDatabase(ctx, projectID, "")
 }
 
 // ListKinds lists all available Kinds in the DataStore

@@ -69,6 +69,7 @@ The tool can be configured through environment variables or command-line flags.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `GCP_PROJECT_ID` | GCP Project ID containing DataStore | **Required** |
+| `DATASTORE_DATABASE_ID` | Datastore/Firestore database ID to use (`(default)` if empty) | empty = `(default)` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to GCP service account JSON | Auto-discovered |
 | `AWS_REGION` | AWS region for DynamoDB tables | `us-east-1` |
 | `AWS_PROFILE` | AWS profile to use | Default profile |
@@ -82,6 +83,7 @@ The tool can be configured through environment variables or command-line flags.
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--project` | GCP Project ID | From env var |
+| `--database-id` | Datastore/Firestore database ID (defaults to `(default)`) | From env var |
 | `--region` | AWS Region | `us-east-1` |
 | `--batch-size` | Batch size for processing | `100` |
 | `--max-workers` | Maximum concurrent workers | `5` |
@@ -95,6 +97,8 @@ The tool can be configured through environment variables or command-line flags.
 # Interactive migration with guided key selection
 export GCP_PROJECT_ID="your-gcp-project"
 export AWS_REGION="us-west-2"
+# Optional: target a non-default database
+export DATASTORE_DATABASE_ID="my-db"
 
 ./datastore-dynamodb-migrator
 ```
@@ -142,19 +146,20 @@ export AWS_REGION="us-west-2"
 
 When running in interactive mode, the tool will:
 
-1. **Discover Kinds**: Automatically find all DataStore Kinds in your project
-2. **Analyze Schemas**: Sample entities to understand field types and structures
-3. **Kind Selection**: For each Kind, you'll be prompted to:
+1. **Select Database (if not provided)**: Lists available Datastore/Firestore database IDs in the project and lets you choose. `(default)` is the default.
+2. **Discover Kinds**: Automatically find all DataStore Kinds in your project
+3. **Analyze Schemas**: Sample entities to understand field types and structures
+4. **Kind Selection**: For each Kind, you'll be prompted to:
    - Choose whether to migrate or skip the Kind
    - Preview field information to help make the decision
-4. **Key Selection**: For Kinds you choose to migrate, you'll be prompted to:
+5. **Key Selection**: For Kinds you choose to migrate, you'll be prompted to:
    - Select a partition key from available fields (including the DataStore entity key identifier)
    - Optionally select a sort key
    - Optionally rename the DynamoDB partition key attribute (the value still comes from the selected source field)
    - Confirm table names
-5. **S3 Storage & Projection**: Optionally enable S3 storage for full records and choose which fields to keep in DynamoDB
-5. **Migration Plan**: Review the complete migration plan before execution
-6. **Progress Tracking**: Monitor real-time progress with detailed statistics
+6. **S3 Storage & Projection**: Optionally enable S3 storage for full records and choose which fields to keep in DynamoDB
+7. **Migration Plan**: Review the complete migration plan before execution
+8. **Progress Tracking**: Monitor real-time progress with detailed statistics
 
 ## Key Selection
 
@@ -204,6 +209,7 @@ You can choose to store the entire record in an Amazon S3 bucket as a JSON objec
 ### Configuration
 
 - Default bucket can be provided via `MIGRATION_S3_BUCKET`. You can override it per Kind during interactive prompts.
+- If the provided S3 bucket does not exist, the tool will automatically create it in your configured AWS region during the interactive setup (skipped in dry-run).
 
 ### Notes
 

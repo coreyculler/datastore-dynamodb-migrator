@@ -16,6 +16,7 @@ This utility migrates Google Cloud Platform (GCP) DataStore tables to Amazon Web
 - **Mapping**: Each DataStore Kind → Individual DynamoDB table
 - **Auto-creation**: DynamoDB tables created automatically if they don't exist
 - **Introspection**: Use reflection/introspection to avoid manual type definitions for each record
+ - **Database Selection**: Support specifying a Datastore/Firestore database ID via `--database-id` flag or `DATASTORE_DATABASE_ID` env var. Interactive mode lists available database IDs when not provided and defaults to `(default)`.
 
 ### Interactive Key Selection
 - List all fields per Kind during migration
@@ -80,6 +81,12 @@ This utility migrates Google Cloud Platform (GCP) DataStore tables to Amazon Web
 ├── go.mod                 # Go module dependencies
 └── README.md              # Project documentation
 ```
+
+## Database ID Selection
+
+- At startup in interactive mode, if no database ID is provided, the tool lists available Datastore/Firestore database IDs for the project and prompts for selection.
+- Non-interactive mode can pass `--database-id` or set `DATASTORE_DATABASE_ID`.
+- The selected database ID is exported to the environment so the Datastore client operates against that database. Empty/omitted uses `(default)`.
 
 ## Development Priorities
 1. **Reliability**: Handle network failures, partial migrations gracefully

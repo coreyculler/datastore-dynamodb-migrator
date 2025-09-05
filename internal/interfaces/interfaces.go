@@ -2,6 +2,7 @@ package interfaces
 
 import (
 	"context"
+	"fmt"
 )
 
 // FieldInfo represents information about a field in a DataStore entity
@@ -82,6 +83,7 @@ type MigrationEngine interface {
 // S3Client interface for interacting with AWS S3
 type S3Client interface {
 	PutJSON(ctx context.Context, bucket string, key string, data interface{}, dryRun bool) (string, error)
+	EnsureBucket(ctx context.Context, bucket string, dryRun bool) error
 	Close() error
 }
 
@@ -91,4 +93,18 @@ type S3StorageOptions struct {
 	Bucket  string `json:"bucket"`
 	// ObjectPrefix is the key prefix (e.g., user-actions/) derived from Kind name (kebab-case)
 	ObjectPrefix string `json:"object_prefix"`
+}
+
+// PartialWriteError indicates that a batch write partially failed and includes
+// the number of items that could not be written even after individual retries.
+type PartialWriteError struct {
+	Failed int
+	Errors []error
+}
+
+func (e *PartialWriteError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("partial write failure: %d item(s) failed", e.Failed)
 }

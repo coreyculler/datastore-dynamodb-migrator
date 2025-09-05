@@ -10,6 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	"strings"
+
+	admin "cloud.google.com/go/firestore/apiv1/admin"
+	adminpb "cloud.google.com/go/firestore/apiv1/admin/adminpb"
 	"github.com/coreyculler/datastore-dynamodb-migrator/config"
 	"github.com/coreyculler/datastore-dynamodb-migrator/internal/cli"
 	"github.com/coreyculler/datastore-dynamodb-migrator/internal/datastore"
@@ -30,6 +34,7 @@ var (
 // Global flags
 var (
 	projectID   string
+	databaseID  string
 	awsRegion   string
 	batchSize   int
 	maxWorkers  int
@@ -52,6 +57,7 @@ func main() {
 	// Add persistent flags
 	rootCmd.PersistentFlags().StringVar(&projectID, "project", "", "GCP Project ID (can also use GCP_PROJECT_ID env var)")
 	rootCmd.PersistentFlags().StringVar(&awsRegion, "region", "us-east-1", "AWS Region (can also use AWS_REGION env var)")
+	rootCmd.PersistentFlags().StringVar(&databaseID, "database-id", "", "GCP Datastore/Firestore database ID (default uses '(default)'; can also use DATASTORE_DATABASE_ID env var)")
 	rootCmd.PersistentFlags().IntVar(&batchSize, "batch-size", 100, "Number of entities to process in each batch")
 	rootCmd.PersistentFlags().IntVar(&maxWorkers, "max-workers", 5, "Maximum number of concurrent workers")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Show what would be migrated without actually doing it")
@@ -115,8 +121,23 @@ func runMigration(cmd *cobra.Command, args []string) error {
 		fmt.Println("🔍 DRY RUN MODE - No actual migration will be performed")
 	}
 
+	// If interactive and no database ID provided, prompt to select database
+	if interactive && cfg.GCP.DatabaseID == "" {
+		selector := cli.NewInteractiveSelector()
+		ids, derr := listFirestoreDatabaseIDs(ctx, cfg.GCP.ProjectID)
+		if derr == nil && len(ids) > 0 {
+			chosen, perr := selector.SelectDatabaseID(ctx, cfg.GCP.ProjectID, ids)
+			if perr == nil {
+				cfg.SetGCPDatabaseID(chosen)
+				if chosen != "" {
+					os.Setenv("DATASTORE_DATABASE_ID", chosen)
+				}
+			}
+		}
+	}
+
 	// Initialize clients
-	datastoreClient, err := datastore.NewClient(ctx, cfg.GCP.ProjectID)
+	datastoreClient, err := datastore.NewClientWithDatabase(ctx, cfg.GCP.ProjectID, cfg.GCP.DatabaseID)
 	if err != nil {
 		return fmt.Errorf("failed to create DataStore client: %w", err)
 	}
@@ -177,6 +198,8 @@ func runMigration(cmd *cobra.Command, args []string) error {
 	// Analyze schemas and configure migrations
 	var migrationConfigs []interfaces.MigrationConfig
 	selector := cli.NewInteractiveSelector()
+
+	ensuredBuckets := make(map[string]bool)
 
 	for _, kind := range kinds {
 		// Check for cancellation at the beginning of each table processing
@@ -267,6 +290,17 @@ func runMigration(cmd *cobra.Command, args []string) error {
 				}
 				fmt.Printf("❌ Failed to configure S3 options for Kind %s: %v\n", kind, err)
 				continue
+			}
+
+			// Ensure S3 bucket exists if S3 is enabled
+			if s3Options != nil && s3Options.Enabled && s3Options.Bucket != "" && !dryRun {
+				if s3Client != nil && !ensuredBuckets[s3Options.Bucket] {
+					if err := s3Client.EnsureBucket(ctx, s3Options.Bucket, dryRun); err != nil {
+						fmt.Printf("❌ Failed to ensure S3 bucket %s: %v\n", s3Options.Bucket, err)
+						continue
+					}
+					ensuredBuckets[s3Options.Bucket] = true
+				}
 			}
 
 			config := interfaces.MigrationConfig{
@@ -433,6 +467,12 @@ func loadConfiguration() (*config.Config, error) {
 		cfg.SetAWSRegion(awsRegion)
 	}
 
+	if databaseID != "" {
+		cfg.SetGCPDatabaseID(databaseID)
+		// Ensure client honors database selection
+		os.Setenv("DATASTORE_DATABASE_ID", databaseID)
+	}
+
 	cfg.SetBatchSize(batchSize)
 	cfg.SetMaxWorkers(maxWorkers)
 	cfg.SetDryRun(dryRun)
@@ -452,7 +492,12 @@ func listKindsCmd() *cobra.Command {
 				return fmt.Errorf("failed to load configuration: %w", err)
 			}
 
-			client, err := datastore.NewClient(ctx, cfg.GCP.ProjectID)
+			// Ensure database ID is honored for this subcommand
+			if cfg.GCP.DatabaseID != "" {
+				os.Setenv("DATASTORE_DATABASE_ID", cfg.GCP.DatabaseID)
+			}
+
+			client, err := datastore.NewClientWithDatabase(ctx, cfg.GCP.ProjectID, cfg.GCP.DatabaseID)
 			if err != nil {
 				return fmt.Errorf("failed to create DataStore client: %w", err)
 			}
@@ -496,7 +541,12 @@ func analyzeCmd() *cobra.Command {
 				return fmt.Errorf("failed to load configuration: %w", err)
 			}
 
-			client, err := datastore.NewClient(ctx, cfg.GCP.ProjectID)
+			// Ensure database ID is honored for this subcommand
+			if cfg.GCP.DatabaseID != "" {
+				os.Setenv("DATASTORE_DATABASE_ID", cfg.GCP.DatabaseID)
+			}
+
+			client, err := datastore.NewClientWithDatabase(ctx, cfg.GCP.ProjectID, cfg.GCP.DatabaseID)
 			if err != nil {
 				return fmt.Errorf("failed to create DataStore client: %w", err)
 			}
@@ -545,4 +595,36 @@ func versionCmd() *cobra.Command {
 			fmt.Printf("Build: %s\n", build)
 		},
 	}
+}
+
+// listFirestoreDatabaseIDs returns database IDs for the given project.
+// It returns ["(default)"] when the default database exists.
+func listFirestoreDatabaseIDs(ctx context.Context, project string) ([]string, error) {
+	client, err := admin.NewFirestoreAdminClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	parent := fmt.Sprintf("projects/%s", project)
+	resp, err := client.ListDatabases(ctx, &adminpb.ListDatabasesRequest{Parent: parent})
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, db := range resp.GetDatabases() {
+		parts := strings.Split(db.GetName(), "/")
+		if len(parts) >= 4 {
+			id := parts[len(parts)-1]
+			if id == "(default)" {
+				ids = append(ids, "(default)")
+			} else {
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return []string{"(default)"}, nil
+	}
+	return ids, nil
 }

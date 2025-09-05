@@ -15,6 +15,7 @@ type Config struct {
 // GCPConfig holds Google Cloud Platform configuration
 type GCPConfig struct {
 	ProjectID   string `json:"project_id"`
+	DatabaseID  string `json:"database_id,omitempty"`
 	Credentials string `json:"credentials,omitempty"` // Path to service account JSON file
 }
 
@@ -39,6 +40,7 @@ func LoadConfig() (*Config, error) {
 	config := &Config{
 		GCP: GCPConfig{
 			ProjectID:   getEnvOrDefault("GCP_PROJECT_ID", ""),
+			DatabaseID:  getEnvOrDefault("DATASTORE_DATABASE_ID", ""),
 			Credentials: getEnvOrDefault("GOOGLE_APPLICATION_CREDENTIALS", ""),
 		},
 		AWS: AWSConfig{
@@ -92,6 +94,11 @@ func (c *Config) SetGCPProjectID(projectID string) {
 	c.GCP.ProjectID = projectID
 }
 
+// SetGCPDatabaseID sets the GCP Datastore/Firestore database ID
+func (c *Config) SetGCPDatabaseID(databaseID string) {
+	c.GCP.DatabaseID = databaseID
+}
+
 // SetAWSRegion sets the AWS region
 func (c *Config) SetAWSRegion(region string) {
 	c.AWS.Region = region
@@ -123,6 +130,16 @@ func (c *Config) SetContinueOnError(continueOnError bool) {
 
 // GetConnectionInfo returns a summary of connection information
 func (c *Config) GetConnectionInfo() string {
+	if c.GCP.DatabaseID != "" {
+		return fmt.Sprintf(
+			"GCP Project: %s (DB: %s), AWS Region: %s, Batch Size: %d, Workers: %d",
+			c.GCP.ProjectID,
+			c.GCP.DatabaseID,
+			c.AWS.Region,
+			c.Migration.BatchSize,
+			c.Migration.MaxWorkers,
+		)
+	}
 	return fmt.Sprintf(
 		"GCP Project: %s, AWS Region: %s, Batch Size: %d, Workers: %d",
 		c.GCP.ProjectID,
