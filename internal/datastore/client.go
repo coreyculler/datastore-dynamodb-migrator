@@ -172,7 +172,7 @@ func (c *Client) AnalyzeKind(ctx context.Context, kind string) (*interfaces.Kind
 }
 
 // GetEntities returns a channel of entities for the specified Kind
-func (c *Client) GetEntities(ctx context.Context, kind string, batchSize int) (<-chan interface{}, error) {
+func (c *Client) GetEntities(ctx context.Context, kind string, batchSize int, order *interfaces.QueryOrder) (<-chan interface{}, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -190,6 +190,14 @@ func (c *Client) GetEntities(ctx context.Context, kind string, batchSize int) (<
 		defer close(entityChan)
 
 		query := datastore.NewQuery(kind)
+		// Apply ordering if provided
+		if order != nil && strings.TrimSpace(order.Field) != "" {
+			field := strings.TrimSpace(order.Field)
+			if order.Desc {
+				field = "-" + field
+			}
+			query = query.Order(field)
+		}
 		it := c.client.Run(ctx, query)
 
 		for {

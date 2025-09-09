@@ -13,7 +13,8 @@ A command-line tool to migrate Google Cloud Platform (GCP) DataStore entities to
 - **Automatic Table Creation**: Creates DynamoDB tables with optimal configurations
 - **Robust Error Handling**: Graceful failure recovery and detailed error reporting
 - **Smart Kind Filtering**: Automatically excludes DataStore system entities (kinds beginning with `__Stat`) from migration
- - **S3 Offloading for Large Records**: Optionally store full records as JSON in S3 and keep a minimal searchable projection in DynamoDB, with an added `S3ObjectPath` attribute
+- **S3 Offloading for Large Records**: Optionally store full records as JSON in S3 and keep a minimal searchable projection in DynamoDB, with an added `S3ObjectPath` attribute
+- **Datastore Query Ordering**: Optionally order the Datastore query by any field (asc/desc) to migrate oldest/newest first. This affects only read order, not DynamoDB schema.
 
 ## Prerequisites
 
@@ -38,7 +39,7 @@ make build
 
 ### Option 2: Using Go Install
 ```bash
-go install https://github.com/coreyculler/datastore-dynamodb-migrator.git@latest
+go install github.com/coreyculler/datastore-dynamodb-migrator@latest
 ```
 
 ### Available Make Targets
@@ -158,8 +159,14 @@ When running in interactive mode, the tool will:
    - Optionally rename the DynamoDB partition key attribute (the value still comes from the selected source field)
    - Confirm table names
 6. **S3 Storage & Projection**: Optionally enable S3 storage for full records and choose which fields to keep in DynamoDB
-7. **Migration Plan**: Review the complete migration plan before execution
-8. **Progress Tracking**: Monitor real-time progress with detailed statistics
+7. **Datastore Query Ordering (Optional)**: Choose a field and direction (ascending/descending) to order the Datastore query. This only affects the order in which records are read and migrated; it has no impact on DynamoDB schema or stored items.
+8. **Migration Plan**: Review the complete migration plan before execution
+9. **Progress Tracking**: Monitor real-time progress with detailed statistics
+
+### Ordering Notes
+- Selecting a field adds `.Order("field")` or `.Order("-field")` to the underlying Datastore query.
+- Useful for time-based migrations (e.g., `created_at` ascending for oldest-first, descending for newest-first).
+- If no ordering is selected, Datastore's default ordering is used.
 
 ## Key Selection
 
@@ -218,145 +225,9 @@ You can choose to store the entire record in an Amazon S3 bucket as a JSON objec
 
 ### Example Interactive Session
 
-```
-DataStore to DynamoDB Migration Tool v1.0.0
-Configuration: GCP Project: my-project, AWS Region: us-east-1, Batch Size: 100, Workers: 5
-
-📋 Discovering DataStore Kinds...
-✅ Found 3 DataStore Kinds
-
-🔍 Analyzing Kind: Users...
-
-=== DataStore Kind: Users ===
-Total entities: 1,247
-Available fields: 8
-
-Field preview:
-  - DataStore Primary Key (ID/Name) (string)
-  - email (string)
-  - created_at (time.Time)
-  - profile (map[string]interface{})
-  - user_id (string)
-
-What would you like to do with this Kind?
-▶ Configure and migrate this Kind
-  Skip this Kind (do not migrate)
-
-✓ Configure and migrate this Kind
-
-=== Configuring Keys for Kind: Users ===
-Total entities: 1,247
-Available fields: 8
-
-Field Information:
-==================
-1. DataStore Primary Key (ID/Name)
-   Type: string
-   Sample: user_12345_key
-
-2. email
-   Type: string  
-   Sample: john@example.com
-
-3. created_at
-   Type: time.Time
-   Sample: 2023-10-15T10:30:00Z
-
-4. profile
-   Type: map[string]interface{}
-   Sample: {"name": "John Doe", "age": 30}
-
-5. user_id
-   Type: string
-   Sample: custom_user_123
-
-Select the Partition Key - this field should uniquely identify most entities:
-▶ DataStore Primary Key (ID/Name) (string)
-  email (string)
-  created_at (time.Time)
-  profile (map[string]interface{})
-  user_id (string)
-
-✓ Partition Key: DataStore Primary Key (ID/Name) (string)
-
-Do you want to add a Sort Key? (Useful for composite keys or ordering):
-▶ No, partition key only
-  Yes, add a sort key
-
-✓ No, partition key only
-
-=== Key Selection Summary ===
-Partition Key: DataStore Primary Key (ID/Name)
-Sort Key: None
-
-Confirm this key configuration?
-▶ Yes, proceed with this configuration
-  No, let me choose again
-
-✓ Yes, proceed with this configuration
-
-Enter DynamoDB table name [Users]: Users
-
-=== Migration Plan Summary ===
-Total Kinds to migrate: 3
-
-1. Users → Users
-   Entities: 1,247
-   Partition Key: id
-   Sort Key: None
-
-2. Orders → Orders
-   Entities: 5,432
-   Partition Key: order_id
-   Sort Key: created_at
-
-3. Products → Products
-   Entities: 892
-   Partition Key: product_id
-   Sort Key: None
-
-Ready to start migration?
-▶ Yes, start migration
-  No, cancel migration
-
-✓ Yes, start migration
-
-🚀 Starting migration...
-Users: 1247/1247 (100.0%) | Errors: 0 - COMPLETED SUCCESSFULLY
-Orders: 5432/5432 (100.0%) | Errors: 0 - COMPLETED SUCCESSFULLY  
-Products: 892/892 (100.0%) | Errors: 0 - COMPLETED SUCCESSFULLY
-
-✅ Migration completed!
-📊 Summary: 3 Kinds migrated, 7571 total entities
-```
-
-### Example: Skipping a Kind
-
-You can also choose to skip Kinds that you don't want to migrate:
-
-```
-🔍 Analyzing Kind: AuditLogs...
-
-=== DataStore Kind: AuditLogs ===
-Total entities: 15,234
-Available fields: 6
-
-Field preview:
-  - DataStore Primary Key (ID/Name) (string)
-  - timestamp (time.Time)
-  - action (string)
-  - user_id (string)
-  - details (map[string]interface{})
-
-What would you like to do with this Kind?
-  Configure and migrate this Kind
-▶ Skip this Kind (do not migrate)
-
-✓ Skip this Kind (do not migrate)
-
-⏭️  Skipping Kind: AuditLogs
-
-🔍 Analyzing Kind: Users...
+``` 
+# See Migration Plan section for ordering summary lines like:
+#    Datastore Order: created_at (desc)
 ```
 
 ## DataStore Kind Filtering

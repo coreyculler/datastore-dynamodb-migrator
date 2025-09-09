@@ -296,7 +296,7 @@ func (e *Engine) Migrate(ctx context.Context, config interfaces.MigrationConfig,
 			totalProcessed = config.Schema.Count // In dry-run, we assume all are processed
 		} else {
 			// Normal mode: actually process entities
-			entityChan, err := e.datastoreClient.GetEntities(ctx, config.SourceKind, batchSize)
+			entityChan, err := e.datastoreClient.GetEntities(ctx, config.SourceKind, batchSize, config.DatastoreOrder)
 			if err != nil {
 				// Check if error is due to context cancellation
 				if ctx.Err() != nil {

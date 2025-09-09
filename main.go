@@ -292,6 +292,17 @@ func runMigration(cmd *cobra.Command, args []string) error {
 				continue
 			}
 
+			// Optional Datastore query ordering
+			dsOrder, err := selector.SelectDatastoreOrder(ctx, *schema)
+			if err != nil {
+				if ctx.Err() != nil {
+					fmt.Println("\nOperation cancelled by user")
+					return nil
+				}
+				fmt.Printf("❌ Failed to configure Datastore ordering for Kind %s: %v\n", kind, err)
+				continue
+			}
+
 			// Ensure S3 bucket exists if S3 is enabled
 			if s3Options != nil && s3Options.Enabled && s3Options.Bucket != "" && !dryRun {
 				if s3Client != nil && !ensuredBuckets[s3Options.Bucket] {
@@ -310,6 +321,7 @@ func runMigration(cmd *cobra.Command, args []string) error {
 				Schema:                   schema,
 				S3Storage:                s3Options,
 				DynamoDBProjectionFields: projection,
+				DatastoreOrder:           dsOrder,
 			}
 
 			migrationConfigs = append(migrationConfigs, config)

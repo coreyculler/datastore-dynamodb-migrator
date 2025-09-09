@@ -24,8 +24,12 @@ func (m *MockDataStoreClient) AnalyzeKind(ctx context.Context, kind string) (*Ki
 	return args.Get(0).(*KindSchema), args.Error(1)
 }
 
-func (m *MockDataStoreClient) GetEntities(ctx context.Context, kind string, batchSize int) (<-chan interface{}, error) {
-	return m.Called(ctx, kind, batchSize).Get(0).(<-chan interface{}), m.Called(ctx, kind, batchSize).Error(1)
+func (m *MockDataStoreClient) GetEntities(ctx context.Context, kind string, batchSize int, order *QueryOrder) (<-chan interface{}, error) {
+	args := m.Called(ctx, kind, batchSize, order)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(<-chan interface{}), args.Error(1)
 }
 
 // Close mocks the Close method

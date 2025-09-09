@@ -221,7 +221,7 @@ func (suite *EngineTestSuite) TestMigrate_Success() {
 	suite.mockDynamoDB.On("CreateTable", mock.AnythingOfType("*context.timerCtx"), config, false).Return(nil)
 
 	entityChan := interfaces.CreateTestEntityChannel(3)
-	suite.mockDataStore.On("GetEntities", mock.AnythingOfType("*context.timerCtx"), config.SourceKind, 100).Return(entityChan, nil)
+	suite.mockDataStore.On("GetEntities", mock.AnythingOfType("*context.timerCtx"), config.SourceKind, 100, mock.Anything).Return(entityChan, nil)
 
 	// Mock entity conversion
 	testEntity := interfaces.CreateTestEntity()
@@ -322,7 +322,7 @@ func (suite *EngineTestSuite) TestMigrate_GetEntitiesError() {
 	suite.mockDynamoDB.On("CreateTable", mock.AnythingOfType("*context.timerCtx"), config, false).Return(nil)
 
 	// Simulate GetEntities returning an error
-	suite.mockDataStore.On("GetEntities", mock.AnythingOfType("*context.timerCtx"), config.SourceKind, 100).Return((<-chan interface{})(nil), fmt.Errorf("failed to get entities"))
+	suite.mockDataStore.On("GetEntities", mock.AnythingOfType("*context.timerCtx"), config.SourceKind, 100, mock.Anything).Return((<-chan interface{})(nil), fmt.Errorf("failed to get entities"))
 
 	progressChan, err := suite.engine.Migrate(ctx, config, false)
 
@@ -413,7 +413,7 @@ func (suite *EngineTestSuite) TestMigrateAll_Success() {
 		suite.mockDynamoDB.On("CreateTable", mock.AnythingOfType("*context.timerCtx"), config, false).Return(nil)
 
 		entityChan := interfaces.CreateTestEntityChannel(2)
-		suite.mockDataStore.On("GetEntities", mock.AnythingOfType("*context.timerCtx"), config.SourceKind, 100).Return(entityChan, nil)
+		suite.mockDataStore.On("GetEntities", mock.AnythingOfType("*context.timerCtx"), config.SourceKind, 100, mock.Anything).Return(entityChan, nil)
 
 		// Create appropriate converted entity based on the config
 		var convertedEntity map[string]interface{}
@@ -565,7 +565,7 @@ func (suite *EngineTestSuite) TestMigrate_ContextCancellation() {
 	suite.mockDynamoDB.On("CreateTable", mock.Anything, config, false).Return(nil)
 
 	entityChan := make(chan interface{}) // Unbuffered channel to control flow
-	suite.mockDataStore.On("GetEntities", mock.Anything, config.SourceKind, 100).Return((<-chan interface{})(entityChan), nil)
+	suite.mockDataStore.On("GetEntities", mock.Anything, config.SourceKind, 100, mock.Anything).Return((<-chan interface{})(entityChan), nil)
 
 	// Cancel the context after a short delay
 	go func() {

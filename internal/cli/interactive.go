@@ -526,6 +526,17 @@ func (s *InteractiveSelector) ConfirmMigration(ctx context.Context, configs []in
 			fmt.Printf("   Sort Key: None\n")
 		}
 
+		// Datastore ordering summary
+		if config.DatastoreOrder != nil && strings.TrimSpace(config.DatastoreOrder.Field) != "" {
+			dir := "asc"
+			if config.DatastoreOrder.Desc {
+				dir = "desc"
+			}
+			fmt.Printf("   Datastore Order: %s (%s)\n", config.DatastoreOrder.Field, dir)
+		} else {
+			fmt.Printf("   Datastore Order: None\n")
+		}
+
 		if config.S3Storage != nil && config.S3Storage.Enabled {
 			fmt.Printf("   S3 Storage: Enabled (bucket: %s, prefix: %s/)\n", config.S3Storage.Bucket, config.S3Storage.ObjectPrefix)
 			if len(config.DynamoDBProjectionFields) > 0 {
@@ -691,6 +702,75 @@ func (s *InteractiveSelector) SelectS3OptionsAndProjection(ctx context.Context, 
 		}
 	}
 	return options, selected, nil
+}
+
+// SelectDatastoreOrder prompts for an optional Datastore query ordering (field and direction)
+func (s *InteractiveSelector) SelectDatastoreOrder(ctx context.Context, schema interfaces.KindSchema) (*interfaces.QueryOrder, error) {
+	prompt := promptui.Select{
+		Label: "Apply ordering to the Datastore query?",
+		Items: []string{"No", "Yes"},
+		Templates: &promptui.SelectTemplates{
+			Label:    "{{ . }}:",
+			Active:   "▶ {{ . }}",
+			Inactive: "  {{ . }}",
+			Selected: "✓ {{ . }}",
+		},
+	}
+	idx, _, err := s.runPromptWithContext(ctx, &prompt)
+	if err != nil {
+		return nil, err
+	}
+	if idx == 0 {
+		return nil, nil
+	}
+
+	// Choose field to order by
+	fields := s.getDisplayFields(schema)
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	var items []string
+	for _, f := range fields {
+		dn := f.Name
+		if f.DisplayName != "" {
+			dn = f.DisplayName
+		}
+		items = append(items, fmt.Sprintf("%s (%s)", dn, f.TypeName))
+	}
+	fieldPrompt := promptui.Select{
+		Label: "Select field to order by",
+		Items: items,
+		Templates: &promptui.SelectTemplates{
+			Label:    "{{ . }}:",
+			Active:   "▶ {{ . }}",
+			Inactive: "  {{ . }}",
+			Selected: "✓ Order By: {{ . }}",
+		},
+		Size: 10,
+	}
+	fidx, _, err := s.runPromptWithContext(ctx, &fieldPrompt)
+	if err != nil {
+		return nil, err
+	}
+	selectedField := fields[fidx].Name
+
+	// Choose direction
+	dirPrompt := promptui.Select{
+		Label: "Order direction",
+		Items: []string{"Ascending", "Descending"},
+		Templates: &promptui.SelectTemplates{
+			Label:    "{{ . }}:",
+			Active:   "▶ {{ . }}",
+			Inactive: "  {{ . }}",
+			Selected: "✓ {{ . }}",
+		},
+	}
+	didx, _, err := s.runPromptWithContext(ctx, &dirPrompt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &interfaces.QueryOrder{Field: selectedField, Desc: didx == 1}, nil
 }
 
 func toKebabCase(s string) string {

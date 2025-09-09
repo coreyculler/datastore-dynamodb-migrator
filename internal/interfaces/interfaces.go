@@ -37,6 +37,8 @@ type MigrationConfig struct {
 	S3Storage *S3StorageOptions `json:"s3_storage,omitempty"`
 	// DynamoDBProjectionFields limits which fields are written to DynamoDB (always includes keys)
 	DynamoDBProjectionFields []string `json:"dynamodb_projection_fields,omitempty"`
+	// DatastoreOrder specifies optional ordering for the Datastore query when fetching entities
+	DatastoreOrder *QueryOrder `json:"datastore_order,omitempty"`
 }
 
 // MigrationProgress tracks the progress of a migration
@@ -53,7 +55,7 @@ type MigrationProgress struct {
 type DataStoreClient interface {
 	ListKinds(ctx context.Context) ([]string, error)
 	AnalyzeKind(ctx context.Context, kind string) (*KindSchema, error)
-	GetEntities(ctx context.Context, kind string, batchSize int) (<-chan interface{}, error)
+	GetEntities(ctx context.Context, kind string, batchSize int, order *QueryOrder) (<-chan interface{}, error)
 	Close() error
 }
 
@@ -93,6 +95,14 @@ type S3StorageOptions struct {
 	Bucket  string `json:"bucket"`
 	// ObjectPrefix is the key prefix (e.g., user-actions/) derived from Kind name (kebab-case)
 	ObjectPrefix string `json:"object_prefix"`
+}
+
+// QueryOrder defines ordering for Datastore queries
+type QueryOrder struct {
+	// Field is the Datastore property name to order by
+	Field string `json:"field"`
+	// Desc indicates descending order when true; ascending otherwise
+	Desc bool `json:"desc"`
 }
 
 // PartialWriteError indicates that a batch write partially failed and includes
